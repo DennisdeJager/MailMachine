@@ -1,0 +1,225 @@
+# Managed by Codex Apps ALM
+name: Deploy Digest
+
+"on":
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      image_digest:
+        description: Image digest, for example sha256:abc
+        required: true
+        type: string
+      deployment_plan_id:
+        description: ALM deployment plan id
+        required: false
+        type: string
+      execution_id:
+        description: ALM execution id
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, capps-alm]
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare image repository
+        id: image
+        run: echo "repository=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy existing digest over LAN SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR }}
+          IMAGE_REF: ${{ steps.image.outputs.repository }}@${{ inputs.image_digest }}
+          WEB_PORT: ${{ vars.WEB_PORT }}
+          APP_PORT: ${{ vars.APP_PORT }}
+          APP_ENV: ${{ vars.APP_ENV }}
+          COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+          ALM_CONTAINER_NAME_TEMPLATE: ${{ vars.ALM_CONTAINER_NAME_TEMPLATE }}
+          ALM_INCLUDE_ENV_IN_CONTAINER_NAME: ${{ vars.ALM_INCLUDE_ENV_IN_CONTAINER_NAME }}
+          ALM_FORCE_CONTAINER_NAMES: ${{ vars.ALM_FORCE_CONTAINER_NAMES }}
+          ALM_APPLY_CONTAINER_LABELS: ${{ vars.ALM_APPLY_CONTAINER_LABELS }}
+          ALM_SERVICE_ROLES: ${{ vars.ALM_SERVICE_ROLES }}
+          WEB_SERVICE_NAME: ${{ vars.WEB_SERVICE_NAME }}
+          WEB_INTERNAL_PORT: ${{ vars.WEB_INTERNAL_PORT }}
+          PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
+          ALM_CALLBACK_URL: ${{ vars.ALM_CALLBACK_URL }}
+          ALM_CALLBACK_TOKEN: ${{ secrets.ALM_CALLBACK_TOKEN }}
+          CAPP_APP_ID: ${{ vars.CAPP_APP_ID || github.event.repository.name }}
+          CAPP_DEPLOYMENT_ID: ${{ vars.CAPP_DEPLOYMENT_ID || vars.CAPP_APP_ID || github.event.repository.name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR' && find '$DEPLOY_APP_DIR' -mindepth 1 ! -name '.env' ! -name '.env.*' -exec rm -rf {} +"
+          printf '%s\n' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+          COMPOSE_FILE=""
+          for candidate in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
+            if [ -f "$candidate" ]; then COMPOSE_FILE="$candidate"; break; fi
+          done
+          if [ -n "$COMPOSE_FILE" ]; then
+            SOURCE_TAR="/tmp/capps-source.tar"
+            SOURCE_ARCHIVE="$SOURCE_TAR.gz"
+            rm -f "$SOURCE_TAR" "$SOURCE_ARCHIVE"
+            if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+              git archive --format=tar -o "$SOURCE_TAR" HEAD
+              if [ -f Dockerfile ] && ! git ls-files --error-unmatch Dockerfile >/dev/null 2>&1; then
+                tar --append -f "$SOURCE_TAR" Dockerfile
+              fi
+              gzip -f "$SOURCE_TAR"
+            else
+              set +e
+              tar --exclude .git --exclude node_modules --exclude dist --exclude .env -czf "$SOURCE_ARCHIVE" .
+              TAR_STATUS=$?
+              set -e
+              if [ "$TAR_STATUS" -ne 0 ]; then
+                if [ "$TAR_STATUS" -eq 1 ] && [ -s "$SOURCE_ARCHIVE" ]; then
+                  echo "Source archive completed with tar warnings; continuing with the generated archive."
+                else
+                  exit "$TAR_STATUS"
+                fi
+              fi
+            fi
+            scp -i ~/.ssh/deploy_key "$SOURCE_ARCHIVE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/source.tar.gz"
+            ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && tar --exclude='.env' --exclude='.env.*' -xzf source.tar.gz && rm source.tar.gz"
+          fi
+          if [ -z "$COMPOSE_FILE" ]; then
+            COMPOSE_FILE="compose.yaml"
+            GENERATED_WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-web}"
+            cat > "$COMPOSE_FILE" <<COMPOSE
+          services:
+            ${GENERATED_WEB_SERVICE_NAME}:
+              image: ${IMAGE_REF}
+              restart: unless-stopped
+              ports:
+                - "${WEB_PORT:-3000}:${WEB_INTERNAL_PORT:-3000}"
+              env_file:
+                - .env
+              environment:
+                APP_ENV: ${APP_ENV:-dev}
+          COMPOSE
+          fi
+          ALM_COMPOSE_OVERRIDE=""
+          alm_slug() {
+            printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[^a-z0-9]+//; s/[^a-z0-9]+$//'
+          }
+          alm_role_for_service() {
+            local service="$(alm_slug "$1")"
+            local entries="${ALM_SERVICE_ROLES:-}"
+            local entry key value
+            IFS=';' read -ra role_entries <<< "$entries"
+            for entry in "${role_entries[@]}"; do
+              key="${entry%%=*}"
+              value="${entry#*=}"
+              if [ "$key" = "$service" ] && [ -n "$value" ]; then printf '%s' "$value"; return; fi
+            done
+            case "$service" in
+              *postgres*|*postgresql*|*mysql*|*mariadb*|*mongo*|*database*|db) printf 'database' ;;
+              *redis*|*cache*) printf 'cache' ;;
+              *minio*|*storage*|*bucket*|*s3*) printf 'storage' ;;
+              *worker*) printf 'worker' ;;
+              *queue*|*rabbitmq*) printf 'queue' ;;
+              *scheduler*|*cron*) printf 'scheduler' ;;
+              *search*|*meilisearch*|*elasticsearch*|*opensearch*) printf 'search' ;;
+              *realtime*|*socket*|*websocket*) printf 'realtime' ;;
+              *proxy*|*nginx*|*caddy*) printf 'proxy' ;;
+              api|*api*) printf 'backend' ;;
+              web) printf 'frontend' ;;
+              *) printf 'service' ;;
+            esac
+          }
+          alm_container_name_for_service() {
+            local service="$(alm_slug "$1")"
+            local role="$2"
+            local template="${ALM_CONTAINER_NAME_TEMPLATE:-}"
+            [ -n "$template" ] || template="{appId}-{service}"
+            local deployment_id="${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
+            local app_slug="$(alm_slug "$deployment_id")"
+            if [[ "$service" == "${app_slug}-"* ]] || [[ "$service" == "${app_slug}_"* ]]; then
+              service="${service:${#app_slug}+1}"
+              [ -n "$service" ] || service="$app_slug"
+            elif [[ -n "$service" ]] && { [[ "$app_slug" == *"-${service}" ]] || [[ "$app_slug" == *"_${service}" ]]; }; then
+              service=""
+            fi
+            local name="$template"
+            name="${name//\{appId\}/$deployment_id}"
+            name="${name//\{env\}/${APP_ENV:-dev}}"
+            name="${name//\{environment\}/${APP_ENV:-dev}}"
+            name="${name//\{service\}/$service}"
+            name="${name//\{role\}/$role}"
+            name="$(alm_slug "$name")"
+            if [ "${ALM_INCLUDE_ENV_IN_CONTAINER_NAME:-false}" = "true" ] && [[ "$template" != *"{env}"* && "$template" != *"{environment}"* ]]; then
+              name="$(alm_slug "$name-${APP_ENV:-dev}")"
+            fi
+            printf '%s' "$name"
+          }
+          if [ "${ALM_FORCE_CONTAINER_NAMES:-true}" = "true" ] || [ "${ALM_APPLY_CONTAINER_LABELS:-true}" = "true" ]; then
+            ALM_COMPOSE_OVERRIDE="compose.alm-names.yaml"
+            {
+              printf 'services:\n'
+              IMAGE_REF="$IMAGE_REF" WEB_PORT="${WEB_PORT:-${APP_PORT:-3000}}" APP_PORT="${APP_PORT:-${WEB_PORT:-3000}}" APP_ENV="${APP_ENV:-${{ inputs.environment }}}" docker compose -f "$COMPOSE_FILE" config --services | while read -r service; do
+                [ -n "$service" ] || continue
+                role="$(alm_role_for_service "$service")"
+                container_name="$(alm_container_name_for_service "$service" "$role")"
+                printf '  %s:\n' "$service"
+                if [ "${ALM_FORCE_CONTAINER_NAMES:-true}" = "true" ]; then
+                  printf '    container_name: "%s"\n' "$container_name"
+                fi
+                if [ "${ALM_APPLY_CONTAINER_LABELS:-true}" = "true" ]; then
+                  printf '    labels:\n'
+                  printf '      smawa.alm.app_id: "%s"\n' "$CAPP_APP_ID"
+                  printf '      smawa.alm.deployment_id: "%s"\n' "${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
+                  printf '      smawa.alm.environment: "%s"\n' "${APP_ENV:-dev}"
+                  printf '      smawa.alm.service: "%s"\n' "$service"
+                  printf '      smawa.alm.container_role: "%s"\n' "$role"
+                  printf '      smawa.alm.managed: "true"\n'
+                fi
+                if [ "$role" = "database" ]; then
+                  printf '    ulimits:\n'
+                  printf '      nofile:\n'
+                  printf '        soft: 65536\n'
+                  printf '        hard: 65536\n'
+                fi
+              done
+            } > "$ALM_COMPOSE_OVERRIDE"
+          fi
+          scp -i ~/.ssh/deploy_key "$COMPOSE_FILE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/compose.yaml"
+          REMOTE_COMPOSE_ARGS="-f compose.yaml"
+          if [ -n "$ALM_COMPOSE_OVERRIDE" ]; then
+            scp -i ~/.ssh/deploy_key "$ALM_COMPOSE_OVERRIDE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/compose.alm-names.yaml"
+            REMOTE_COMPOSE_ARGS="$REMOTE_COMPOSE_ARGS -f compose.alm-names.yaml"
+          fi
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && touch .env && IMAGE_REF='$IMAGE_REF' WEB_PORT='${WEB_PORT:-${APP_PORT:-3000}}' APP_PORT='${APP_PORT:-${WEB_PORT:-3000}}' APP_ENV='${APP_ENV:-${{ inputs.environment }}}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' up -d --remove-orphans --no-build"
+          WEB_CONTAINER_IP=$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && cid=\$(COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' ps -q '${WEB_SERVICE_NAME:-web}' 2>/dev/null || true); if [ -n \"\$cid\" ]; then docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"\$cid\"; fi" | tr -d '\r\n')
+          CADDY_TARGET=""
+          if [ -n "${WEB_CONTAINER_IP:-}" ] && [ -n "${WEB_INTERNAL_PORT:-}" ]; then
+            CADDY_TARGET="$WEB_CONTAINER_IP:$WEB_INTERNAL_PORT"
+          fi
+          if [ -n "${ALM_CALLBACK_URL:-}" ] && [ -n "${ALM_CALLBACK_TOKEN:-}" ]; then
+            curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
+              -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
+              -H "content-type: application/json" \
+              -d "{\"environment\":\"${{ inputs.environment }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"${{ inputs.image_digest }}\",\"status\":\"deployed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webContainerIp\":\"$WEB_CONTAINER_IP\",\"webInternalPort\":\"${WEB_INTERNAL_PORT:-}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"publicDomain\":\"${PUBLIC_DOMAIN:-}\",\"caddyTarget\":\"$CADDY_TARGET\",\"message\":\"Self-hosted runner deployed existing digest to ${{ inputs.environment }}\"}"
+          fi
