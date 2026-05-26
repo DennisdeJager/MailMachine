@@ -63,3 +63,21 @@ Gebruiker heeft `DennisdeJager/MailMachine` gekozen als doelrepo. Remote inspect
 ## Eindoordeel
 
 GO - DEV deployment en health/smoke zijn groen.
+
+## PostgreSQL herdeploy 2026-05-26
+
+- Deployed commit: `42f25db`
+- Execution: `exec-1779828263654`
+- GitHub Actions run: `https://github.com/DennisdeJager/MailMachine/actions/runs/26474082127`
+- Target: DEV `192.168.10.12`
+- Web port: `31018`
+- Healthcheck: `http://192.168.10.12:31018/api/health` -> HTTP 200, `{ ok: true, app: "MailMachine", status: "healthy", database: "available" }`
+- Root smoke: `http://192.168.10.12:31018/` -> HTTP 200, Microsoft setup aanwezig, geen databaseconfiguratie-waarschuwing.
+- Containers: `mailmachine-web` up, `mailmachine-postgres` up/healthy.
+- PostgreSQL exposure: alleen intern `5432/tcp`, geen publieke databasepoort.
+
+### Afwijkingen en herstel
+
+- Eerste nieuwe deploypoging blokkeerde door ALM manifestvorm; `requiredSecrets` moest objecten met `name` gebruiken en interne PostgreSQL hoort niet in app dependencies.
+- Tweede nieuwe deploypoging faalde omdat `compose.yaml` secret-interpolatie te vroeg hard faalde tijdens ALM `docker compose config`.
+- Hersteld door ALM manifest/config te corrigeren, DEV `.env` op de host te vullen met random secrets en compose secret-interpolatie ALM-compatibel te maken.

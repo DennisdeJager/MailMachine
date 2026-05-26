@@ -2,7 +2,7 @@
 
 ## Status
 
-Development is uitgebreid met PostgreSQL runtime en herwerkte Microsoft setup-flow. GitHub secrets en ALM app-registratie zijn bijgewerkt; DEV moet opnieuw worden gedeployed om de databasecontainer actief te krijgen.
+Development is uitgebreid met PostgreSQL runtime en herwerkte Microsoft setup-flow. DEV draait opnieuw met interne PostgreSQL container en database-aware healthcheck.
 
 ## Product
 

@@ -12,6 +12,9 @@ GO voor Development-output. Geen open bevindingen.
 - `docker compose config --services` met testsecrets - geslaagd, toont `postgres` en `web`.
 - GitHub secret presence check - geslaagd, `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` bestaan zonder waarden te tonen.
 - ALM app-registratie - bijgewerkt naar `web` + interne `postgres` service met verplichte PostgreSQL dependency.
+- DEV deployment - geslaagd via GitHub Actions run `26474082127`.
+- DEV healthcheck - geslaagd, database `available`.
+- DEV containercheck - `mailmachine-postgres` healthy zonder publieke port mapping.
 - `npm audit --omit=dev` - geslaagd, 0 productie-vulnerabilities.
 - Browsercheck op `http://localhost:3000` - geslaagd.
 - Setup bootstrap API - geslaagd, retourneert app registration script, rollen, scopes, waarschuwingen en post-run checks.
@@ -33,8 +36,9 @@ GO voor Development-output. Geen open bevindingen.
 - Hertest: alle checks geslaagd.
 - Tweede testronde: Microsoft setup uitgebreid met PowerShell bootstrap-script. Unit test toegevoegd en build opnieuw geslaagd.
 - Derde testronde: PostgreSQL compose-runtime, migratierunner en database-aware healthcheck toegevoegd. Typecheck, tests, build en compose config opnieuw geslaagd.
+- Deployment hertest: ALM manifest/config en compose-interpolatie gecorrigeerd; DEV deploy daarna groen.
 
 ## Resterende risico's
 
 - Dev dependencies hebben npm audit meldingen; productie-audit (`--omit=dev`) is schoon.
-- ALM/GitHub secrets `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` moeten aanwezig zijn voordat DEV deployment met PostgreSQL groen kan worden.
+- Secretrotatie voor `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` moet operationeel geborgd worden.
