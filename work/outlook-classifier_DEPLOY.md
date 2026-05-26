@@ -35,6 +35,7 @@ Daarna deploy via ALM DEV route.
 
 ## Healthcheck
 
+- HTTP 200 op `/api/health`
 - HTTP 200 op `/`
 - API 200 op `POST /api/v1/setup`
 
