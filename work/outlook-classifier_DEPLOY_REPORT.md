@@ -2,11 +2,11 @@
 
 ## Eindoordeel
 
-In progress - MailMachine repository gekozen als deploymentroute.
+Done - deployed naar DEV.
 
 ## Reden
 
-De deployment-gate was niet groen omdat de workspace geen Git repository was.
+De deployment-gate was initieel niet groen omdat de workspace geen Git repository was.
 
 Feiten:
 
@@ -29,17 +29,37 @@ Volgens de centrale SmawaGitOps deploymentregels moet een DEV-deployment via de 
 
 Gebruiker heeft `DennisdeJager/MailMachine` gekozen als doelrepo. Remote inspectie met `git ls-remote` gaf geen refs terug, dus de repo lijkt leeg.
 
-## Nog niet uitgevoerd
+## Uitgevoerd
 
-- Geen ALM DEV deployment.
-- Geen remote healthcheck.
-- Geen remote smoke test.
-- Geen status naar Done.
+- Repository geinitialiseerd en gepusht naar `DennisdeJager/MailMachine`.
+- ALM app geregistreerd als `mailmachine`.
+- GitHub provisioning uitgevoerd voor workflows, environments, secrets/variables en runner.
+- DEV deployment uitgevoerd via ALM latest-to-dev flow.
+- Remote healthcheck uitgevoerd.
+- Remote smoke test op `/` uitgevoerd.
 
-## Nodig van conductor bij blokkade
+## Deploymentbewijs
 
-Kies een route:
+- App ID: `mailmachine`
+- Repo: `DennisdeJager/MailMachine`
+- Branch: `main`
+- Deployed commit: `31b81e717fb3ff411ef1882ec0012dad59852da5`
+- Deployment plan: `plan-1779825704111`
+- Execution: `exec-1779825862609`
+- GitHub Actions run: `https://github.com/DennisdeJager/MailMachine/actions/runs/26472111286`
+- Target: DEV `192.168.10.12`
+- Web port: `31018`
+- Container: `mailmachine-web`
+- Container status: `Up`
+- Healthcheck: `http://192.168.10.12:31018/api/health` -> HTTP 200, `{ ok: true, app: "MailMachine", status: "healthy" }`
+- Smoke: `http://192.168.10.12:31018/` -> HTTP 200
 
-1. Maak of wijs een GitHub repository aan voor deze app en laat de code committen/pushen, daarna deploy via ALM.
-2. Geef een bestaande ALM app-id/deployroute en repository op.
-3. Geef expliciete hotfix-toestemming voor direct deployen buiten ALM, inclusief doelpad, app-id, database/secrets-strategie en rollbackafspraak.
+## Afwijkingen
+
+- Eerste deployment run faalde omdat de Dockerfile een ontbrekende `public/` directory kopieerde.
+- Fix: `public/.gitkeep` toegevoegd en opnieuw gedeployed.
+- Er is nog geen publiek domein/Caddy-route gekoppeld; de DEV app is bereikbaar via host/poort.
+
+## Eindoordeel
+
+GO - DEV deployment en health/smoke zijn groen.
