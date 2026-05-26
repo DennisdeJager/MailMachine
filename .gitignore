@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+.env
+.env.*
+!.env.example
+
+.next-dev.out.log
+.next-dev.err.log
+tsconfig.tsbuildinfo
+
+.codex-smawa-gitops/
+*.tgz
+*.log
