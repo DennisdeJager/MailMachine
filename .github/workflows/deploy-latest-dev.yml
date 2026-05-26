@@ -121,6 +121,8 @@ jobs:
           PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
           ALM_CALLBACK_URL: ${{ vars.ALM_CALLBACK_URL }}
           ALM_CALLBACK_TOKEN: ${{ secrets.ALM_CALLBACK_TOKEN }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
           CAPP_APP_ID: ${{ vars.CAPP_APP_ID || github.event.repository.name }}
           CAPP_DEPLOYMENT_ID: ${{ vars.CAPP_DEPLOYMENT_ID || vars.CAPP_APP_ID || github.event.repository.name }}
           SOURCE_COMMIT: ${{ github.sha }}
@@ -189,6 +191,20 @@ jobs:
                 APP_ENV: ${APP_ENV:-dev}
           COMPOSE
           fi
+          if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+            echo "POSTGRES_PASSWORD secret is required for MailMachine PostgreSQL." >&2
+            exit 1
+          fi
+          if [ -z "${CREDENTIAL_ENCRYPTION_KEY:-}" ]; then
+            echo "CREDENTIAL_ENCRYPTION_KEY secret is required for MailMachine credential vault." >&2
+            exit 1
+          fi
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'CREDENTIAL_ENCRYPTION_KEY=%s\n' "$CREDENTIAL_ENCRYPTION_KEY"
+          } > .env.deploy
+          scp -i ~/.ssh/deploy_key .env.deploy "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/.env"
+          rm -f .env.deploy
           COMPOSE_UP_FLAG="--no-build"
           if grep -Eq '^[[:space:]]+build:' "$COMPOSE_FILE"; then
             COMPOSE_UP_FLAG="--build"

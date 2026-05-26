@@ -13,12 +13,25 @@ Webapplicatie voor het monitoren van een of meer Outlook-mailboxen via Microsoft
 ## Configuratie
 
 ```env
-DATABASE_URL=postgres://user:password@db:5432/outlook_classifier
+WEB_PORT=3000
+APP_ENV=dev
+POSTGRES_PASSWORD=gebruik-een-lange-random-database-wachtwoord
 CREDENTIAL_ENCRYPTION_KEY=gebruik-een-lange-random-key-minimaal-24-tekens
 ADMIN_SETUP_TOKEN=optionele-admin-api-token
 ```
 
-Voer `db/migrations/001_initial.sql` uit op PostgreSQL voordat beheerdata wordt opgeslagen. De database hoort intern bereikbaar te zijn; expose PostgreSQL niet met een externe Docker port mapping.
+De Docker Compose runtime maakt een interne PostgreSQL container aan en zet `DATABASE_URL` voor de webcontainer op basis van `POSTGRES_PASSWORD`. De webcontainer voert bij start `npm run db:migrate` uit, zodat `db/migrations/*.sql` idempotent worden toegepast voordat Next.js start.
+
+De database hoort intern bereikbaar te zijn; expose PostgreSQL niet met een externe Docker port mapping.
+
+## PostgreSQL runtime
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+Voor ALM/GitHub deployments moeten de repository/environment secrets `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` aanwezig zijn. De deployment workflow schrijft deze waarden op de host naar `.env`, zonder secretwaarden naar Git te committen.
 
 ## Development
 

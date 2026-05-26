@@ -10,17 +10,22 @@ Nog niet beschikbaar in deze projectloze workspace.
 
 ## Migraties
 
-- Voer `db/migrations/001_initial.sql` uit op PostgreSQL.
+- PostgreSQL draait als interne `postgres` service in `compose.yaml`.
+- De webcontainer voert `npm run db:migrate` uit bij start.
+- De migratierunner registreert toegepaste bestanden in `schema_migrations`.
+- `db/migrations/001_initial.sql` wordt idempotent toegepast.
 - PostgreSQL mag niet extern worden geexposed met `ports:`.
 
 ## Environment/secrets
 
-- `DATABASE_URL`
+- `POSTGRES_PASSWORD`
 - `CREDENTIAL_ENCRYPTION_KEY`
 - Optioneel: `ADMIN_SETUP_TOKEN`
 - Microsoft bootstrap-output: Tenant ID, Client ID en Client secret uit het setup-script. Secret direct opslaan in credential vault.
 
 Secretwaarden niet in Git of rapportages opnemen.
+
+Status 2026-05-26: `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` zijn als GitHub repository secrets ingesteld. De ALM app-registratie bevat nu `web` + interne `postgres` service en de PostgreSQL dependency.
 
 ## Build en deploy
 
@@ -43,13 +48,14 @@ Daarna deploy via ALM DEV route.
 
 - Dashboard opent.
 - Microsoft setup genereert redirect URI en admin-consent URL.
+- Microsoft setup toont de flow in tabs: overzicht, rechten, uitvoeren, opslaan en controleren.
 - In een geconfigureerde databaseomgeving: categorie, credential, mailbox en regel aanmaken.
 - Handmatige monitor-run geeft gecontroleerd resultaat of duidelijke Graph-fout.
 
 ## Rollback
 
 - Vorige applicatieversie terugzetten via ALM.
-- Database migratie is additive; rollback vereist geen dataverlies zolang tabellen blijven staan.
+- Database migratie is additive; rollback vereist geen dataverlies zolang tabellen en het Docker volume blijven staan.
 
 ## Risico's
 

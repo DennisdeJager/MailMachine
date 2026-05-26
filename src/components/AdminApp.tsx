@@ -14,11 +14,12 @@ import {
   Tags,
   Trash2
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useMemo, useState } from "react";
 import type { Category, Credential, Mailbox, Rule } from "@/domain/types";
 import type { DashboardData } from "@/domain/repository";
 
 type ApiState = { type: "idle" | "loading" | "success" | "error"; message: string };
+type SetupTab = "overview" | "permissions" | "run" | "save" | "verify";
 type SetupGuide = {
   redirectUri: string;
   consentUrl: string;
@@ -82,6 +83,7 @@ export function AdminApp({ initialData }: { initialData: DashboardData }) {
   const [rules, setRules] = useState(initialData.rules);
   const [state, setState] = useState<ApiState>({ type: "idle", message: "" });
   const [setup, setSetup] = useState<null | SetupGuide>(null);
+  const [setupTab, setSetupTab] = useState<SetupTab>("overview");
   const [monitorResult, setMonitorResult] = useState<string>("");
 
   const activeRules = useMemo(() => rules.filter((rule) => rule.isActive).length, [rules]);
@@ -336,11 +338,11 @@ export function AdminApp({ initialData }: { initialData: DashboardData }) {
             </form>
           </section>
 
-          <section className="panel span-12" id="setup">
+          <section className="panel span-12 setup-panel" id="setup">
             <div className="toolbar">
               <div>
                 <h2>Microsoft/OAuth setup automation</h2>
-                <div className="muted">Genereert redirect URI, admin-consent link en manifest-permissions voor Microsoft Entra.</div>
+                <div className="muted">Begeleide flow voor een veilige Entra app registration, Graph consent en credential-opslag.</div>
               </div>
               <button className="btn btn-secondary" onClick={async () => {
                 const result = await submit("Setup gegenereerd.", () => postJson("/api/v1/setup", {
@@ -349,66 +351,130 @@ export function AdminApp({ initialData }: { initialData: DashboardData }) {
                   appName: "Outlook Classifier Admin",
                   redirectUri: `${window.location.origin}/api/v1/setup/callback`
                 }));
-                if (result) setSetup(result as SetupGuide);
+                if (result) {
+                  setSetup(result as SetupGuide);
+                  setSetupTab("overview");
+                }
               }}><RefreshCw size={18} /> Genereer setup</button>
             </div>
             {setup ? (
-              <div className="steps">
-                <div className="step">
-                  <strong>Aanbevolen veilige route</strong>
-                  <p>{setup.bootstrap.recommendedMode}</p>
-                  <p className="help">De app maakt niets stilzwijgend aan in Microsoft Entra. De beheerder ziet eerst exact welke rechten en commando&apos;s worden gebruikt.</p>
-                </div>
-                <div className="step">
-                  <strong>Benodigde Entra-rollen</strong>
-                  {setup.bootstrap.requiredAdminRoles.map((item) => <p key={item}><ShieldCheck size={16} /> {item}</p>)}
-                </div>
-                <div className="step">
-                  <strong>Graph scopes voor de bootstrap-login</strong>
-                  <div className="badge-row">
-                    {setup.bootstrap.requiredScopes.map((scope) => <span className="badge warning" key={scope}>{scope}</span>)}
+              <div className="setup-workflow">
+                <div className="setup-summary">
+                  <div>
+                    <strong>Aanbevolen route</strong>
+                    <p>{setup.bootstrap.recommendedMode}</p>
+                  </div>
+                  <div>
+                    <strong>Tenant</strong>
+                    <p>{credentials[0]?.tenantId || "Nog niet ingevuld; script gebruikt placeholder."}</p>
+                  </div>
+                  <div>
+                    <strong>Resultaat</strong>
+                    <p>App registration, service principal, client secret en Graph application permissions.</p>
                   </div>
                 </div>
-                <div className="step">
-                  <strong>Application permissions voor de mail-app</strong>
-                  <div className="badge-row">
-                    {setup.bootstrap.permissions.map((permission) => <span className="badge" key={permission}>{permission}</span>)}
+
+                <div className="tabs" role="tablist" aria-label="Microsoft setup stappen">
+                  <SetupTabButton active={setupTab === "overview"} onClick={() => setSetupTab("overview")}>1. Overzicht</SetupTabButton>
+                  <SetupTabButton active={setupTab === "permissions"} onClick={() => setSetupTab("permissions")}>2. Rechten</SetupTabButton>
+                  <SetupTabButton active={setupTab === "run"} onClick={() => setSetupTab("run")}>3. Uitvoeren</SetupTabButton>
+                  <SetupTabButton active={setupTab === "save"} onClick={() => setSetupTab("save")}>4. Opslaan</SetupTabButton>
+                  <SetupTabButton active={setupTab === "verify"} onClick={() => setSetupTab("verify")}>5. Controleren</SetupTabButton>
+                </div>
+
+                {setupTab === "overview" ? (
+                  <div className="tab-panel">
+                    <div className="flow-grid">
+                      <SetupInfo title="Wat maakt dit aan">
+                        <p>Het script maakt een Microsoft Entra app registration en service principal voor MailMachine. Daarna krijgt die app tenant-brede Graph application permissions, zodat mailboxen server-side gemonitord kunnen worden.</p>
+                      </SetupInfo>
+                      <SetupInfo title="Wat doet de app niet automatisch">
+                        <p>MailMachine voert het script niet zelf uit en schrijft geen secrets naar Git. Een beheerder reviewt en draait het script bewust in PowerShell.</p>
+                      </SetupInfo>
+                      <SetupInfo title="Redirect URI">
+                        <code>{setup.redirectUri}</code>
+                      </SetupInfo>
+                      <SetupInfo title="Admin consent URL">
+                        <a href={setup.consentUrl} target="_blank" rel="noreferrer">{setup.consentUrl}</a>
+                      </SetupInfo>
+                    </div>
                   </div>
-                </div>
-                <div className="step">
-                  <strong>Security waarschuwingen</strong>
-                  {setup.bootstrap.securityWarnings.map((item) => <p key={item}><ShieldCheck size={16} /> {item}</p>)}
-                </div>
-                <div className="step">
-                  <strong>Uitvoerinstructies</strong>
-                  <ol>
-                    {setup.bootstrap.instructions.map((item) => <li key={item}>{item}</li>)}
-                  </ol>
-                </div>
-                <div className="step"><strong>Redirect URI</strong><code>{setup.redirectUri}</code></div>
-                <div className="step"><strong>Admin consent</strong><a href={setup.consentUrl} target="_blank" rel="noreferrer">{setup.consentUrl}</a></div>
-                <div className="step"><strong>Checklist</strong>{setup.checklist.map((item) => <p key={item}><CheckCircle2 size={16} /> {item}</p>)}</div>
-                <div className="step">
-                  <div className="toolbar">
-                    <strong>PowerShell bootstrap-script</strong>
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(setup.bootstrap.powershellScript);
-                        setState({ type: "success", message: "Script naar klembord gekopieerd." });
-                      }}
-                    >
-                      <Copy size={18} /> Kopieer script
-                    </button>
+                ) : null}
+
+                {setupTab === "permissions" ? (
+                  <div className="tab-panel">
+                    <div className="flow-grid">
+                      <SetupInfo title="Benodigde Entra-rollen">
+                        {setup.bootstrap.requiredAdminRoles.map((item) => <p key={item}><ShieldCheck size={16} /> {item}</p>)}
+                      </SetupInfo>
+                      <SetupInfo title="Bootstrap-login scopes">
+                        <div className="badge-row">{setup.bootstrap.requiredScopes.map((scope) => <span className="badge warning" key={scope}>{scope}</span>)}</div>
+                      </SetupInfo>
+                      <SetupInfo title="MailMachine application permissions">
+                        <div className="badge-row">{setup.bootstrap.permissions.map((permission) => <span className="badge" key={permission}>{permission}</span>)}</div>
+                      </SetupInfo>
+                      <SetupInfo title="Security aandachtspunten">
+                        {setup.bootstrap.securityWarnings.map((item) => <p key={item}><ShieldCheck size={16} /> {item}</p>)}
+                      </SetupInfo>
+                    </div>
                   </div>
-                  <pre>{setup.bootstrap.powershellScript}</pre>
-                </div>
-                <div className="step">
-                  <strong>Controle na uitvoeren</strong>
-                  {setup.bootstrap.postRunChecks.map((item) => <p key={item}><CheckCircle2 size={16} /> {item}</p>)}
-                </div>
-                <div className="step"><strong>Manifest patch</strong><pre>{JSON.stringify(setup.manifestPatch, null, 2)}</pre></div>
+                ) : null}
+
+                {setupTab === "run" ? (
+                  <div className="tab-panel">
+                    <SetupInfo title="Uitvoerstappen">
+                      <ol>{setup.bootstrap.instructions.map((item) => <li key={item}>{item}</li>)}</ol>
+                    </SetupInfo>
+                    <div className="step script-step">
+                      <div className="toolbar">
+                        <strong>PowerShell bootstrap-script</strong>
+                        <button
+                          className="btn btn-secondary"
+                          type="button"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(setup.bootstrap.powershellScript);
+                            setState({ type: "success", message: "Script naar klembord gekopieerd." });
+                          }}
+                        >
+                          <Copy size={18} /> Kopieer script
+                        </button>
+                      </div>
+                      <pre>{setup.bootstrap.powershellScript}</pre>
+                    </div>
+                  </div>
+                ) : null}
+
+                {setupTab === "save" ? (
+                  <div className="tab-panel">
+                    <div className="flow-grid">
+                      <SetupInfo title="Na uitvoeren direct bewaren">
+                        <p>Kopieer Tenant ID, Client ID en Client secret uit de PowerShell-output naar de credential vault. Microsoft toont de client secret maar een keer.</p>
+                      </SetupInfo>
+                      <SetupInfo title="Credential vault">
+                        <p>De vault versleutelt de client secret server-side met <code>CREDENTIAL_ENCRYPTION_KEY</code> en bewaart alleen encrypted data in PostgreSQL.</p>
+                      </SetupInfo>
+                      <SetupInfo title="Daarna mailbox koppelen">
+                        <p>Maak een mailbox aan met deze credential en gebruik alleen mailboxen waarvoor monitoring operationeel is toegestaan.</p>
+                      </SetupInfo>
+                      <SetupInfo title="Checklist">
+                        {setup.checklist.map((item) => <p key={item}><CheckCircle2 size={16} /> {item}</p>)}
+                      </SetupInfo>
+                    </div>
+                  </div>
+                ) : null}
+
+                {setupTab === "verify" ? (
+                  <div className="tab-panel">
+                    <div className="flow-grid">
+                      <SetupInfo title="Controle na uitvoeren">
+                        {setup.bootstrap.postRunChecks.map((item) => <p key={item}><CheckCircle2 size={16} /> {item}</p>)}
+                      </SetupInfo>
+                      <SetupInfo title="Manifest patch">
+                        <pre>{JSON.stringify(setup.manifestPatch, null, 2)}</pre>
+                      </SetupInfo>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : <div className="muted">Klik op genereren om de tenant-specifieke setupinformatie te maken.</div>}
           </section>
@@ -442,5 +508,22 @@ function Field({ name, label, type = "text", placeholder, defaultValue }: { name
       {label}
       <input name={name} type={type} placeholder={placeholder} defaultValue={defaultValue} required={label.includes("*")} />
     </label>
+  );
+}
+
+function SetupTabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
+  return (
+    <button className={active ? "tab active" : "tab"} type="button" role="tab" aria-selected={active} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function SetupInfo({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="step">
+      <strong>{title}</strong>
+      {children}
+    </div>
   );
 }
