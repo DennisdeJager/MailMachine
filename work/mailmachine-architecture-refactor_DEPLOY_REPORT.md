@@ -181,3 +181,33 @@ Correctieve actie:
 - De build-time rewrite in `next.config.ts` is verwijderd.
 - Runtime middleware proxy't `/api/*` alleen wanneer `APP_ROLE=web` naar `API_BASE_URL`.
 - De API-container (`APP_ROLE=api`) handelt zijn eigen API routes direct af.
+
+## Eindresultaat - 2026-06-07
+
+Status: GO
+
+Deployed commit: `155469bf2927c70c46c264d01075f4fb4856acd2`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092984220
+Resultaat: `success`
+
+Containerarchitectuur:
+
+- `mailmachine-web` draait op DEV app-host `192.168.10.12`.
+- `mailmachine-api` draait op DEV app-host `192.168.10.12`.
+- `mailmachine-postgres` draait op local-data host `192.168.10.50` met hostpoort `15433`.
+
+Healthcheck:
+
+- `http://192.168.10.12:31018/api/health`
+- Resultaat: `200 OK`
+- Response: `{"ok":true,"app":"MailMachine","status":"healthy","database":"available"}`
+- Headerbewijs: `x-middleware-rewrite: http://api:3001/api/health`
+
+Smoke test:
+
+- `http://192.168.10.12:31018/`
+- Resultaat: `200 OK`
+
+Eindoordeel:
+
+GO. MailMachine is via de reguliere ALM route gedeployed naar DEV met `mailmachine-web` en `mailmachine-api` in de dev container en `mailmachine-postgres` in de local-data container.
