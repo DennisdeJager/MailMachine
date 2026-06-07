@@ -154,6 +154,22 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          dump_mailmachine_diagnostics() {
+            local status="$?"
+            echo "::group::MailMachine deploy diagnostics"
+            if [ -n "${DEPLOY_HOST:-}" ] && [ -n "${DEPLOY_USER:-}" ] && [ -f ~/.ssh/deploy_key ]; then
+              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker ps -a --filter 'name=mailmachine' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
+              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker logs --tail 120 mailmachine-api" || true
+              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker logs --tail 80 mailmachine-web" || true
+            fi
+            if [ -n "${DATA_DEPLOY_HOST:-192.168.10.50}" ] && [ -n "${DATA_DEPLOY_USER_RESOLVED:-}" ] && [ -f ~/.ssh/deploy_key ]; then
+              ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@${DATA_DEPLOY_HOST:-192.168.10.50}" "docker ps -a --filter 'name=mailmachine-postgres' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
+              ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@${DATA_DEPLOY_HOST:-192.168.10.50}" "docker logs --tail 80 mailmachine-postgres" || true
+            fi
+            echo "::endgroup::"
+            exit "$status"
+          }
+          trap dump_mailmachine_diagnostics ERR
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR' && find '$DEPLOY_APP_DIR' -mindepth 1 ! -name '.env' ! -name '.env.*' -exec rm -rf {} +"
           printf '%s\n' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
           COMPOSE_FILE=""

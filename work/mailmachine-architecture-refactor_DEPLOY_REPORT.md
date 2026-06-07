@@ -129,3 +129,20 @@ Correctieve actie:
 
 - De workflow schrijft geen bestaande `DATABASE_URL` secret meer naar de app-host `.env`.
 - De API gebruikt de compose-default `postgres://mailmachine:${POSTGRES_PASSWORD}@192.168.10.50:${POSTGRES_PORT:-15433}/mailmachine`, zodat stale secret-config de data-host split niet kan overrulen.
+
+## Remediation Correctie 4 - 2026-06-07
+
+Commit: `e1535854b54f5a950bd857b0b4ab0cd9257cf3a7`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092685934
+Resultaat: `failure`
+
+Nieuwe bevinding:
+
+- `mailmachine-postgres` draait op de data-host.
+- `mailmachine-api` start, maar faalt nog voor de health gate.
+- De standaard workflow-log bevatte geen containerlogs, waardoor de oorzaak niet feitelijk zichtbaar was.
+
+Correctieve actie:
+
+- De ALM workflow dumpt bij een deploy-fout nu `docker ps` en tail-logs van `mailmachine-api`, `mailmachine-web` en `mailmachine-postgres`.
+- Er worden geen `.env`-inhoud of secretwaarden gelogd.
