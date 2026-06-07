@@ -146,3 +146,20 @@ Correctieve actie:
 
 - De ALM workflow dumpt bij een deploy-fout nu `docker ps` en tail-logs van `mailmachine-api`, `mailmachine-web` en `mailmachine-postgres`.
 - Er worden geen `.env`-inhoud of secretwaarden gelogd.
+
+## Remediation Correctie 5 - 2026-06-07
+
+Commit: `0c6a3a7db4a73785e5164774ba27933fd38e0592`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092779714
+Resultaat: `failure`
+
+Nieuwe bevinding:
+
+- Diagnostics tonen dat `mailmachine-postgres` healthy draait op `192.168.10.50:15433`.
+- `mailmachine-api` restart door `TypeError: Invalid URL` bij het parsen van de database URL.
+- Oorzaak: het Postgres-wachtwoord bevat URL-speciale tekens en moet als URL password-component ge-encoded worden.
+
+Correctieve actie:
+
+- De workflow schrijft opnieuw expliciet `DATABASE_URL`, maar nu gegenereerd uit de reguliere `POSTGRES_PASSWORD` secret met URL-encoding.
+- De data-host `.env` blijft het raw wachtwoord gebruiken voor de Postgres container.

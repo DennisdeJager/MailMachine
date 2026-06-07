@@ -224,6 +224,7 @@ jobs:
             fi
             scp -i ~/.ssh/deploy_key "$SOURCE_ARCHIVE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/source.tar.gz"
             ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && tar --exclude='.env' --exclude='.env.*' -xzf source.tar.gz && rm source.tar.gz"
+            POSTGRES_PASSWORD_ENCODED="$(POSTGRES_PASSWORD="$POSTGRES_PASSWORD" node -e 'process.stdout.write(encodeURIComponent(process.env.POSTGRES_PASSWORD || ""))')"
             {
               printf 'APP_ENV=%s\n' "${APP_ENV:-dev}"
               printf 'WEB_PORT=%s\n' "${WEB_PORT:-${APP_PORT:-3000}}"
@@ -231,6 +232,7 @@ jobs:
               printf 'API_BASE_URL=%s\n' "${API_BASE_URL:-http://api:3001}"
               printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
               printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+              printf 'DATABASE_URL=postgres://mailmachine:%s@192.168.10.50:%s/mailmachine\n' "$POSTGRES_PASSWORD_ENCODED" "${POSTGRES_PORT:-15433}"
               printf 'CREDENTIAL_ENCRYPTION_KEY=%s\n' "$CREDENTIAL_ENCRYPTION_KEY"
               if [ -n "${ADMIN_SETUP_TOKEN:-}" ]; then
                 printf 'ADMIN_SETUP_TOKEN=%s\n' "$ADMIN_SETUP_TOKEN"
