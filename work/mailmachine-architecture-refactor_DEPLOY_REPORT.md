@@ -70,8 +70,20 @@ Resultaat: `failure`
 Nieuwe blocker:
 
 - De self-hosted runner kan `192.168.10.50` bereiken en hostkeys ophalen.
-- Login naar `DATA_DEPLOY_USER@192.168.10.50` faalt met `Permission denied (publickey,password)`.
-- Daardoor wordt `mailmachine-postgres` niet op de data-host aangemaakt en kan de app-deploy niet doorgaan.
+- De eerste remediation gebruikte ten onrechte een aparte `DATA_DEPLOY_USER`/`DATA_DEPLOY_SSH_KEY` route.
+- Dit wijkt af van de normale ALM-afspraak. De workflow is daarna aangepast naar het bestaande VCCM-patroon: gebruik de reguliere ALM deploy key en resolveer de data-host user via de normale deploy-user en `root`.
+
+## Remediation Correctie 2026-06-07
+
+Commit: `2bc6bae` introduceerde een te specifieke data-host SSH-route. Die interpretatie was fout.
+
+Correctie:
+
+- Geen aparte data-host deploy key vereist.
+- De workflow gebruikt nu de bestaande ALM deploy key.
+- De workflow probeert op `local-data` de normale deploy-user en daarna `root`, net als het bewezen VCCM-patroon.
+- Data-compose directory: `/data/compose/mailmachine-postgres`.
+- Data-compose file: `compose.data.yaml`.
 
 ## Vereiste Correctie
 
@@ -79,7 +91,7 @@ Herstartfase: Development.
 
 Minimaal nodig:
 
-1. Geef de ALM deploy key toegang tot `local-data` of configureer `DATA_DEPLOY_USER` en `DATA_DEPLOY_SSH_KEY` voor de GitHub `dev` environment.
-2. Controleer DEV environment/secrets voor `mailmachine-api`: `POSTGRES_PASSWORD`, `CREDENTIAL_ENCRYPTION_KEY` en optioneel `DATABASE_URL`.
-3. ALM service roles bijwerken naar minimaal `web=frontend;api=backend`; Postgres hoort niet meer op de app-host.
-4. Daarna opnieuw deployen naar DEV en remote health/smoke uitvoeren.
+1. Nieuwe workflowcorrectie pushen.
+2. Opnieuw via de normale ALM/GitHub route naar DEV deployen.
+3. Controleer daarna `mailmachine-postgres` op `local-data`, `mailmachine-api` en `mailmachine-web` op DEV.
+4. Remote health/smoke uitvoeren.
