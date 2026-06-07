@@ -54,13 +54,32 @@ Directe SSH-verificatie vanaf deze Codex-sessie naar `capps@192.168.10.12` en `c
 
 NO-GO. Deployment is niet afgerond en MailMachine mag niet als Done worden gemarkeerd.
 
+## Remediation Poging 2026-06-07
+
+Na de eerste NO-GO is de `Deploy Latest To Dev` workflow aangepast zodat deze:
+
+- `compose.data.yaml` naar `local-data` probeert te kopiëren;
+- `/data/compose/mailmachine-postgres/.env` op de data-host schrijft zonder secretwaarden te loggen;
+- `mailmachine-postgres` op `192.168.10.50` probeert te starten;
+- daarna de app-host `.env` schrijft voor `mailmachine-web` en `mailmachine-api`.
+
+Commit: `2bc6baef52b5644397b6d7f165c169efbe3c1f12`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092255015
+Resultaat: `failure`
+
+Nieuwe blocker:
+
+- De self-hosted runner kan `192.168.10.50` bereiken en hostkeys ophalen.
+- Login naar `DATA_DEPLOY_USER@192.168.10.50` faalt met `Permission denied (publickey,password)`.
+- Daardoor wordt `mailmachine-postgres` niet op de data-host aangemaakt en kan de app-deploy niet doorgaan.
+
 ## Vereiste Correctie
 
 Herstartfase: Development.
 
 Minimaal nodig:
 
-1. ALM/GitHub deployroute uitbreiden zodat `mailmachine-postgres` op `local-data` wordt uitgerold of aantoonbaar vooraf via ALM/data-route aanwezig is.
-2. DEV environment/secrets voor `mailmachine-api` controleren: `DATABASE_URL`, `POSTGRES_PASSWORD`, `CREDENTIAL_ENCRYPTION_KEY`.
+1. Geef de ALM deploy key toegang tot `local-data` of configureer `DATA_DEPLOY_USER` en `DATA_DEPLOY_SSH_KEY` voor de GitHub `dev` environment.
+2. Controleer DEV environment/secrets voor `mailmachine-api`: `POSTGRES_PASSWORD`, `CREDENTIAL_ENCRYPTION_KEY` en optioneel `DATABASE_URL`.
 3. ALM service roles bijwerken naar minimaal `web=frontend;api=backend`; Postgres hoort niet meer op de app-host.
 4. Daarna opnieuw deployen naar DEV en remote health/smoke uitvoeren.
