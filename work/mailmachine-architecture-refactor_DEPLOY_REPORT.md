@@ -112,3 +112,20 @@ Correctieve actie:
 
 - MailMachine gebruikt voortaan de dedicated Postgres hostpoort `15433`.
 - `compose.data.yaml`, app `DATABASE_URL` defaults, workflow defaults, `.env.example`, README en deploymentplan zijn daarop aangepast.
+
+## Remediation Correctie 3 - 2026-06-07
+
+Commit: `08be7d2a39af85523ebe4476de7a81c5bfc0c22d`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092591741
+Resultaat: `failure`
+
+Nieuwe bevinding:
+
+- `mailmachine-postgres` werd op `local-data` succesvol gerecreated en gestart.
+- Build van `mailmachine-web` en `mailmachine-api` slaagde.
+- `mailmachine-api` bleef unhealthy tijdens de database healthcheck.
+
+Correctieve actie:
+
+- De workflow schrijft geen bestaande `DATABASE_URL` secret meer naar de app-host `.env`.
+- De API gebruikt de compose-default `postgres://mailmachine:${POSTGRES_PASSWORD}@192.168.10.50:${POSTGRES_PORT:-15433}/mailmachine`, zodat stale secret-config de data-host split niet kan overrulen.

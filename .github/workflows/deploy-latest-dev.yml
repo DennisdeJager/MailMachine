@@ -113,7 +113,6 @@ jobs:
           API_BASE_URL: ${{ vars.API_BASE_URL || 'http://api:3001' }}
           POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '15433' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
           ADMIN_SETUP_TOKEN: ${{ secrets.ADMIN_SETUP_TOKEN }}
           COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
@@ -216,9 +215,6 @@ jobs:
               printf 'API_BASE_URL=%s\n' "${API_BASE_URL:-http://api:3001}"
               printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
               printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-              if [ -n "${DATABASE_URL:-}" ]; then
-                printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
-              fi
               printf 'CREDENTIAL_ENCRYPTION_KEY=%s\n' "$CREDENTIAL_ENCRYPTION_KEY"
               if [ -n "${ADMIN_SETUP_TOKEN:-}" ]; then
                 printf 'ADMIN_SETUP_TOKEN=%s\n' "$ADMIN_SETUP_TOKEN"
