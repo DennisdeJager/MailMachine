@@ -163,3 +163,21 @@ Correctieve actie:
 
 - De workflow schrijft opnieuw expliciet `DATABASE_URL`, maar nu gegenereerd uit de reguliere `POSTGRES_PASSWORD` secret met URL-encoding.
 - De data-host `.env` blijft het raw wachtwoord gebruiken voor de Postgres container.
+
+## Remediation Correctie 6 - 2026-06-07
+
+Commit: `bb05f41e64de397b93e7dfb8dd51bea9e4b887c7`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092871535
+Resultaat: `success`
+
+Nieuwe bevinding:
+
+- ALM deploy slaagde en `mailmachine-postgres`, `mailmachine-api` en `mailmachine-web` kwamen door de compose health gates.
+- DEV smoke op `http://192.168.10.12:31018/` gaf `200 OK`.
+- DEV smoke op `http://192.168.10.12:31018/api/health` gaf `503` vanaf de web-container omdat de build-time rewrite niet runtime naar `mailmachine-api` wees.
+
+Correctieve actie:
+
+- De build-time rewrite in `next.config.ts` is verwijderd.
+- Runtime middleware proxy't `/api/*` alleen wanneer `APP_ROLE=web` naar `API_BASE_URL`.
+- De API-container (`APP_ROLE=api`) handelt zijn eigen API routes direct af.
