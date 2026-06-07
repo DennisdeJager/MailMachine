@@ -111,7 +111,7 @@ jobs:
           APP_PORT: ${{ vars.APP_PORT }}
           APP_ENV: ${{ vars.APP_ENV }}
           API_BASE_URL: ${{ vars.API_BASE_URL || 'http://api:3001' }}
-          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '55432' }}
+          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '15433' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
@@ -180,7 +180,7 @@ jobs:
             scp -i ~/.ssh/deploy_key compose.data.yaml "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST:$DATA_COMPOSE_DIR/compose.data.yaml"
             {
               printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-55432}"
+              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
             } | ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST" "umask 077 && cat > '$DATA_COMPOSE_DIR/.env.tmp' && mv '$DATA_COMPOSE_DIR/.env.tmp' '$DATA_COMPOSE_DIR/.env'"
             ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST" "cd '$DATA_COMPOSE_DIR' && docker compose -f compose.data.yaml up -d"
           fi
@@ -214,7 +214,7 @@ jobs:
               printf 'WEB_PORT=%s\n' "${WEB_PORT:-${APP_PORT:-3000}}"
               printf 'APP_PORT=%s\n' "${APP_PORT:-${WEB_PORT:-3000}}"
               printf 'API_BASE_URL=%s\n' "${API_BASE_URL:-http://api:3001}"
-              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-55432}"
+              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
               printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
               if [ -n "${DATABASE_URL:-}" ]; then
                 printf 'DATABASE_URL=%s\n' "$DATABASE_URL"

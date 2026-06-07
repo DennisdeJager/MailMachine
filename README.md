@@ -19,8 +19,8 @@ WEB_PORT=3000
 APP_ENV=dev
 API_BASE_URL=http://api:3001
 POSTGRES_PASSWORD=gebruik-een-lange-random-database-wachtwoord
-POSTGRES_PORT=55432
-DATABASE_URL=postgres://mailmachine:<password>@192.168.10.50:55432/mailmachine
+POSTGRES_PORT=15433
+DATABASE_URL=postgres://mailmachine:<password>@192.168.10.50:15433/mailmachine
 CREDENTIAL_ENCRYPTION_KEY=gebruik-een-lange-random-key-minimaal-24-tekens
 ADMIN_SETUP_TOKEN=optionele-admin-api-token
 ```

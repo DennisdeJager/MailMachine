@@ -95,3 +95,20 @@ Minimaal nodig:
 2. Opnieuw via de normale ALM/GitHub route naar DEV deployen.
 3. Controleer daarna `mailmachine-postgres` op `local-data`, `mailmachine-api` en `mailmachine-web` op DEV.
 4. Remote health/smoke uitvoeren.
+
+## Remediation Correctie 2 - 2026-06-07
+
+Commit: `0b90bb20bee23d2412563037af60e3fa3098de01`
+Run: https://github.com/DennisdeJager/MailMachine/actions/runs/27092442952
+Resultaat: `failure`
+
+Nieuwe bevinding:
+
+- De reguliere ALM deploy key werkt voor de data-host via het VCCM-patroon.
+- De workflow bereikte `local-data`, schreef de data-compose context en startte Docker Compose.
+- De resterende blocker was geen toegangsprobleem maar een poortconflict: `192.168.10.50:55432` is al bezet.
+
+Correctieve actie:
+
+- MailMachine gebruikt voortaan de dedicated Postgres hostpoort `15433`.
+- `compose.data.yaml`, app `DATABASE_URL` defaults, workflow defaults, `.env.example`, README en deploymentplan zijn daarop aangepast.

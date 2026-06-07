@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: mailmachine
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
     ports:
-      - "192.168.10.50:${POSTGRES_PORT:-55432}:5432"
+      - "192.168.10.50:${POSTGRES_PORT:-15433}:5432"
     volumes:
       - /data/postgres/mailmachine/data:/var/lib/postgresql/data
     healthcheck:

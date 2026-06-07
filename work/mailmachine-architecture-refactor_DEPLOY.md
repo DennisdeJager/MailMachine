@@ -55,5 +55,5 @@ Zonder secretwaarden vastleggen:
 ## Risico's En Aandachtspunten
 
 - Deployment moet bevestigen dat PostgreSQL niet publiek bereikbaar is.
-- De API-service moet de data-host op `192.168.10.50:${POSTGRES_PORT:-55432}` kunnen bereiken.
+- De API-service moet de data-host op `192.168.10.50:${POSTGRES_PORT:-15433}` kunnen bereiken.
 - Geen Deployment uitgevoerd in deze fase.

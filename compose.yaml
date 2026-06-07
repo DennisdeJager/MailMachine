@@ -35,7 +35,7 @@ services:
       APP_ENV: "${APP_ENV:-dev}"
       APP_ROLE: "api"
       PORT: "3001"
-      DATABASE_URL: "${DATABASE_URL:-postgres://mailmachine:${POSTGRES_PASSWORD}@192.168.10.50:${POSTGRES_PORT:-55432}/mailmachine}"
+      DATABASE_URL: "${DATABASE_URL:-postgres://mailmachine:${POSTGRES_PASSWORD}@192.168.10.50:${POSTGRES_PORT:-15433}/mailmachine}"
       CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
       ADMIN_SETUP_TOKEN: "${ADMIN_SETUP_TOKEN:-}"
     healthcheck:
