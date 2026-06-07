@@ -17,8 +17,7 @@ import {
   Trash2
 } from "lucide-react";
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import type { Category, Credential, Mailbox, Rule } from "@/domain/types";
-import type { DashboardData } from "@/domain/repository";
+import type { Category, Credential, DashboardData, Mailbox, Rule } from "@/domain/types";
 
 type ApiState = { type: "idle" | "loading" | "success" | "error"; message: string };
 type SetupTab = "overview" | "permissions" | "run" | "save" | "verify";
@@ -165,7 +164,7 @@ export function AdminApp({ initialData }: { initialData: DashboardData }) {
           <section className="panel span-12">
             <h2>Database configuratie nodig</h2>
             <p className="muted">{initialData.dbError}</p>
-            <p>Voer de SQL-migratie uit in PostgreSQL en configureer <strong>DATABASE_URL</strong> en <strong>CREDENTIAL_ENCRYPTION_KEY</strong>. De app bewaart beheerdata niet in bestanden of browseropslag.</p>
+            <p>Controleer <strong>API_BASE_URL</strong> op de webservice en configureer <strong>DATABASE_URL</strong> en <strong>CREDENTIAL_ENCRYPTION_KEY</strong> alleen op de API-service. De app bewaart beheerdata niet in bestanden of browseropslag.</p>
           </section>
         ) : null}
 

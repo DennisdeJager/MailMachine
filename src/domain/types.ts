@@ -45,6 +45,16 @@ export type Credential = {
   lastVerifiedAt: string | null;
 };
 
+export type DashboardData = {
+  credentials: Credential[];
+  mailboxes: Mailbox[];
+  categories: Category[];
+  rules: Rule[];
+  audits: Array<{ id: string; action: string; entityType: string; entityName: string; actor: string; createdAt: string }>;
+  dbReady: boolean;
+  dbError?: string;
+};
+
 export type MessageForClassification = {
   id: string;
   subject: string;

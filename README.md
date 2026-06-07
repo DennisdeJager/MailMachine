@@ -5,7 +5,9 @@ Webapplicatie voor het monitoren van een of meer Outlook-mailboxen via Microsoft
 ## Stack
 
 - Next.js App Router
-- PostgreSQL via raw SQL (`postgres`)
+- `mailmachine-web` als stateless UI/runtime
+- `mailmachine-api` als enige database-eigenaar met raw SQL (`postgres`)
+- `mailmachine-postgres` op de lokale data-host
 - AES-256-GCM versleuteling voor Microsoft client secrets
 - Microsoft Graph client-credential flow
 - API-prefix `/api/v1`
@@ -15,23 +17,41 @@ Webapplicatie voor het monitoren van een of meer Outlook-mailboxen via Microsoft
 ```env
 WEB_PORT=3000
 APP_ENV=dev
+API_BASE_URL=http://api:3001
 POSTGRES_PASSWORD=gebruik-een-lange-random-database-wachtwoord
+POSTGRES_PORT=55432
+DATABASE_URL=postgres://mailmachine:<password>@192.168.10.50:55432/mailmachine
 CREDENTIAL_ENCRYPTION_KEY=gebruik-een-lange-random-key-minimaal-24-tekens
 ADMIN_SETUP_TOKEN=optionele-admin-api-token
 ```
 
-De Docker Compose runtime maakt een interne PostgreSQL container aan en zet `DATABASE_URL` voor de webcontainer op basis van `POSTGRES_PASSWORD`. De webcontainer voert bij start `npm run db:migrate` uit, zodat `db/migrations/*.sql` idempotent worden toegepast voordat Next.js start.
+De app-runtime op DEV (`192.168.10.12`) draait twee containers:
 
-De database hoort intern bereikbaar te zijn; expose PostgreSQL niet met een externe Docker port mapping.
+- `mailmachine-web`: UI, geen `DATABASE_URL`, proxyt `/api/*` naar `mailmachine-api`.
+- `mailmachine-api`: API-contracten, migraties en databaseconnectie.
 
-## PostgreSQL runtime
+De data-runtime op `local-data` (`192.168.10.50`) draait `mailmachine-postgres` met eigen database, role en volume. Alleen `mailmachine-api` gebruikt `DATABASE_URL`.
+
+## Lokale runtime
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
 
-Voor ALM/GitHub deployments moeten de repository/environment secrets `POSTGRES_PASSWORD` en `CREDENTIAL_ENCRYPTION_KEY` aanwezig zijn. De deployment workflow schrijft deze waarden op de host naar `.env`, zonder secretwaarden naar Git te committen.
+Start op `local-data` (`192.168.10.50`) eerst de databasecontainer:
+
+```bash
+docker compose -f compose.data.yaml up -d
+```
+
+Start daarna op DEV (`192.168.10.12`) de app-containers:
+
+```bash
+docker compose up -d --build
+```
+
+Voor ALM/GitHub deployments moeten de repository/environment secrets `POSTGRES_PASSWORD`, `DATABASE_URL` en `CREDENTIAL_ENCRYPTION_KEY` aanwezig zijn. De deployment workflow schrijft deze waarden op de host naar `.env`, zonder secretwaarden naar Git te committen.
 
 ## Development
 

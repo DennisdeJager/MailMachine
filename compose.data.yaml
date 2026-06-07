@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mailmachine-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mailmachine
+      POSTGRES_USER: mailmachine
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    ports:
+      - "192.168.10.50:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - /data/postgres/mailmachine/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailmachine -d mailmachine"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536

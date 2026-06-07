@@ -1,17 +1,7 @@
 import { getDb } from "@/lib/db";
 import { encryptSecret } from "@/lib/crypto";
-import type { Category, Credential, Mailbox, Rule } from "./types";
+import type { Category, Credential, DashboardData, Mailbox, Rule } from "./types";
 import type postgres from "postgres";
-
-export type DashboardData = {
-  credentials: Credential[];
-  mailboxes: Mailbox[];
-  categories: Category[];
-  rules: Rule[];
-  audits: Array<{ id: string; action: string; entityType: string; entityName: string; actor: string; createdAt: string }>;
-  dbReady: boolean;
-  dbError?: string;
-};
 
 const mapCredential = (row: Record<string, unknown>): Credential => ({
   id: String(row.id),

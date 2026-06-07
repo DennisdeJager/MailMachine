@@ -4,31 +4,42 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: mailmachine-web
     restart: unless-stopped
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-3000}:3000"
     environment:
       APP_ENV: "${APP_ENV:-dev}"
-      DATABASE_URL: "postgres://mailmachine:${POSTGRES_PASSWORD}@postgres:5432/mailmachine"
-      CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
-
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: mailmachine
-      POSTGRES_USER: mailmachine
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-    volumes:
-      - mailmachine-postgres-data:/var/lib/postgresql/data
+      APP_ROLE: "web"
+      PORT: "3000"
+      API_BASE_URL: "${API_BASE_URL:-http://api:3001}"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mailmachine -d mailmachine"]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 10
 
-volumes:
-  mailmachine-postgres-data:
+  api:
+    image: "${API_IMAGE_REF:-mailmachine-api:local}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mailmachine-api
+    restart: unless-stopped
+    expose:
+      - "3001"
+    environment:
+      APP_ENV: "${APP_ENV:-dev}"
+      APP_ROLE: "api"
+      PORT: "3001"
+      DATABASE_URL: "${DATABASE_URL:-postgres://mailmachine:${POSTGRES_PASSWORD}@192.168.10.50:${POSTGRES_PORT:-55432}/mailmachine}"
+      CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
+      ADMIN_SETUP_TOKEN: "${ADMIN_SETUP_TOKEN:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
