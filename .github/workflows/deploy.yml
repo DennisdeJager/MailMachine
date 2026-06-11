@@ -1,17 +1,15 @@
 # Managed by Codex Apps ALM
 name: Deploy Digest
+run-name: >-
+  Deploy ${{ inputs.environment }}${{ inputs.deploy_context_key && format(' · {0}', inputs.deploy_context_key) || '' }}${{ inputs.deploy_context_title && format(' · {0}', inputs.deploy_context_title) || '' }}
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       environment:
         description: Target environment
         required: true
-        type: choice
-        options:
-          - dev
-          - test
-          - prod
+        type: string
       image_digest:
         description: Image digest, for example sha256:abc
         required: true
@@ -22,6 +20,46 @@ name: Deploy Digest
         type: string
       execution_id:
         description: ALM execution id
+        required: false
+        type: string
+      execution_item_key:
+        description: ALM execution item key
+        required: false
+        type: string
+      placement_street_id:
+        description: ALM target placement street id
+        required: false
+        type: string
+      placement_phase_id:
+        description: ALM target placement phase id
+        required: false
+        type: string
+      placement_server_id:
+        description: ALM target placement server id
+        required: false
+        type: string
+      placement_caddy_instance_id:
+        description: ALM target Caddy instance id
+        required: false
+        type: string
+      source_placement_street_id:
+        description: ALM source placement street id
+        required: false
+        type: string
+      source_placement_phase_id:
+        description: ALM source placement phase id
+        required: false
+        type: string
+      source_placement_server_id:
+        description: ALM source placement server id
+        required: false
+        type: string
+      deploy_context_key:
+        description: Optional backlog/PBI code for the deploy run name
+        required: false
+        type: string
+      deploy_context_title:
+        description: Optional backlog/PBI title for the deploy run name
         required: false
         type: string
 
@@ -49,6 +87,9 @@ jobs:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR }}
+          ALM_DATA_BASE_DIR: ${{ vars.ALM_DATA_BASE_DIR }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL: ${{ vars.DATABASE_SSL }}
           IMAGE_REF: ${{ steps.image.outputs.repository }}@${{ inputs.image_digest }}
           WEB_PORT: ${{ vars.WEB_PORT }}
           APP_PORT: ${{ vars.APP_PORT }}
@@ -61,6 +102,7 @@ jobs:
           ALM_SERVICE_ROLES: ${{ vars.ALM_SERVICE_ROLES }}
           WEB_SERVICE_NAME: ${{ vars.WEB_SERVICE_NAME }}
           WEB_INTERNAL_PORT: ${{ vars.WEB_INTERNAL_PORT }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH }}
           PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
           ALM_CALLBACK_URL: ${{ vars.ALM_CALLBACK_URL }}
           ALM_CALLBACK_TOKEN: ${{ secrets.ALM_CALLBACK_TOKEN }}
@@ -73,7 +115,35 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR' && find '$DEPLOY_APP_DIR' -mindepth 1 ! -name '.env' ! -name '.env.*' -exec rm -rf {} +"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$DEPLOY_APP_DIR' '${ALM_DATA_BASE_DIR:-}'" <<'CAPPS_PREPARE_APP_DIR'
+          set -eu
+          APP_DIR="$1"
+          ALM_DATA_BASE="${2:-}"
+          ALM_DATA_PRESERVE=""
+          case "$ALM_DATA_BASE" in
+            "$APP_DIR"/*)
+              ALM_DATA_PRESERVE="${ALM_DATA_BASE#"$APP_DIR"/}"
+              ALM_DATA_PRESERVE="${ALM_DATA_PRESERVE%%/*}"
+              ;;
+          esac
+          mkdir -p "$APP_DIR"
+          TARGET_OWNER="$(id -u):$(id -g)"
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo chown -R "$TARGET_OWNER" "$APP_DIR"
+          elif command -v docker >/dev/null 2>&1; then
+            docker run --rm -v "$APP_DIR:/capps-appdir" alpine:3.20 chown -R "$TARGET_OWNER" /capps-appdir || true
+          fi
+          chmod -R u+rwX "$APP_DIR" 2>/dev/null || true
+          CLEANUP_ERRORS="$(mktemp)"
+          if ! find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name '.env' ! -name '.env.*' ! -name 'data' ! -name 'storage' ! -name 'uploads' ${ALM_DATA_PRESERVE:+! -name "$ALM_DATA_PRESERVE"} -exec rm -rf {} + 2>"$CLEANUP_ERRORS"; then
+            echo "ALM deploy: opschonen van $APP_DIR is mislukt. Deploy user $(id -un) mist eigenaarschap op bestaande bestanden; passwordless sudo ontbreekt en docker-chown kon dit niet herstellen." >&2
+            head -n 5 "$CLEANUP_ERRORS" >&2 || true
+            echo "Herstel eenmalig als root op de Proxmox-host van deze target: draai scripts/proxmox/fix-data-ownership.sh --apply uit de ALMDeployer-repo om $APP_DIR host-side te herstellen (zie RDWorkxGitOps/08-infrastructure/uid-mapping.md)." >&2
+            rm -f "$CLEANUP_ERRORS"
+            exit 1
+          fi
+          rm -f "$CLEANUP_ERRORS"
+          CAPPS_PREPARE_APP_DIR
           printf '%s\n' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
           COMPOSE_FILE=""
           for candidate in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
@@ -104,7 +174,52 @@ jobs:
             fi
             scp -i ~/.ssh/deploy_key "$SOURCE_ARCHIVE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/source.tar.gz"
             ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && tar --exclude='.env' --exclude='.env.*' -xzf source.tar.gz && rm source.tar.gz"
+            ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi"
           fi
+          RUNTIME_ENV_FILE="$(mktemp)"
+          touch "$RUNTIME_ENV_FILE"
+          if [ -n "${DATABASE_URL:-}" ]; then printf 'DATABASE_URL=%s\n' "$DATABASE_URL" >> "$RUNTIME_ENV_FILE"; fi
+          if [ -n "${DATABASE_SSL:-}" ]; then printf 'DATABASE_SSL=%s\n' "$DATABASE_SSL" >> "$RUNTIME_ENV_FILE"; fi
+          if [ -s "$RUNTIME_ENV_FILE" ]; then
+            scp -i ~/.ssh/deploy_key "$RUNTIME_ENV_FILE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/.env.alm-runtime" >/dev/null
+            ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$DEPLOY_APP_DIR'" <<'CAPPS_APPLY_RUNTIME_ENV'
+          set -eu
+          APP_DIR="$1"
+          cd "$APP_DIR"
+          touch .env
+          if [ -s .env.alm-runtime ]; then
+            awk -F= '
+              NR==FNR {
+                key=$1
+                if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+                  values[key]=$0
+                  order[++count]=key
+                }
+                next
+              }
+              {
+                key=$0
+                sub(/=.*/, "", key)
+                if (key in values) {
+                  if (!seen[key]++) print values[key]
+                  next
+                }
+                print
+              }
+              END {
+                for (i=1; i<=count; i++) {
+                  key=order[i]
+                  if (!seen[key]++) print values[key]
+                }
+              }
+            ' .env.alm-runtime .env > .env.tmp
+            mv .env.tmp .env
+            chmod 600 .env || true
+            rm -f .env.alm-runtime
+          fi
+          CAPPS_APPLY_RUNTIME_ENV
+          fi
+          rm -f "$RUNTIME_ENV_FILE"
           if [ -z "$COMPOSE_FILE" ]; then
             COMPOSE_FILE="compose.yaml"
             GENERATED_WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-web}"
@@ -120,6 +235,21 @@ jobs:
               environment:
                 APP_ENV: ${APP_ENV:-dev}
           COMPOSE
+          fi
+          # PBI-5 R5: een digest-promotie pint exact $IMAGE_REF. Een compose met
+          # build:-sleutel zou op de target een eigen image bouwen waardoor de
+          # digest-garantie vervalt; een stille terugval naar een mutable tag is
+          # niet toegestaan. Expliciet blokkeren met een duidelijke fout.
+          if grep -Eq '^[[:space:]]+build:' "$COMPOSE_FILE"; then
+            BUILD_KEY_MESSAGE="FOUT: $COMPOSE_FILE bevat een build:-sleutel; een digest-promotie kan dan niet garanderen dat exact $IMAGE_REF draait. Maak de app digest-deploybaar (image-only compose, image: \${IMAGE_REF}) of verwijder de build:-sleutel. Een stille terugval naar een mutable tag is niet toegestaan (PBI-5 R5)."
+            if [ -n "${ALM_CALLBACK_URL:-}" ] && [ -n "${ALM_CALLBACK_TOKEN:-}" ]; then
+              curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
+                -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
+                -H "content-type: application/json" \
+                -d "{\"environment\":\"${{ inputs.environment }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"${{ inputs.image_digest }}\",\"status\":\"failed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"executionItemKey\":\"${{ inputs.execution_item_key }}\",\"placement\":{\"streetId\":\"${{ inputs.placement_street_id }}\",\"phaseId\":\"${{ inputs.placement_phase_id }}\",\"serverId\":\"${{ inputs.placement_server_id }}\",\"caddyInstanceId\":\"${{ inputs.placement_caddy_instance_id }}\"},\"sourcePlacement\":{\"streetId\":\"${{ inputs.source_placement_street_id }}\",\"phaseId\":\"${{ inputs.source_placement_phase_id }}\",\"serverId\":\"${{ inputs.source_placement_server_id }}\"},\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"message\":\"$BUILD_KEY_MESSAGE\"}" || true
+            fi
+            echo "$BUILD_KEY_MESSAGE" >&2
+            exit 1
           fi
           ALM_COMPOSE_OVERRIDE=""
           alm_slug() {
@@ -154,17 +284,25 @@ jobs:
             local service="$(alm_slug "$1")"
             local role="$2"
             local template="${ALM_CONTAINER_NAME_TEMPLATE:-}"
-            [ -n "$template" ] || template="{appId}-{service}"
-            local deployment_id="${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
-            local app_slug="$(alm_slug "$deployment_id")"
+            [ -n "$template" ] || template="{deploymentId}-{service}"
+            local app_id="${CAPP_APP_ID:-${CAPP_DEPLOYMENT_ID:-}}"
+            local deployment_id="${CAPP_DEPLOYMENT_ID:-$app_id}"
+            local app_slug="$(alm_slug "$app_id")"
             if [[ "$service" == "${app_slug}-"* ]] || [[ "$service" == "${app_slug}_"* ]]; then
               service="${service:${#app_slug}+1}"
               [ -n "$service" ] || service="$app_slug"
             elif [[ -n "$service" ]] && { [[ "$app_slug" == *"-${service}" ]] || [[ "$app_slug" == *"_${service}" ]]; }; then
               service=""
             fi
+            if [ "$role" = "database" ]; then
+              case "$service" in
+                postgres|postgresql) service="postgres" ;;
+                mysql|mariadb|mongo|mongodb|database) service="db" ;;
+              esac
+            fi
             local name="$template"
-            name="${name//\{appId\}/$deployment_id}"
+            name="${name//\{appId\}/$app_id}"
+            name="${name//\{deploymentId\}/$deployment_id}"
             name="${name//\{env\}/${APP_ENV:-dev}}"
             name="${name//\{environment\}/${APP_ENV:-dev}}"
             name="${name//\{service\}/$service}"
@@ -179,7 +317,7 @@ jobs:
             ALM_COMPOSE_OVERRIDE="compose.alm-names.yaml"
             {
               printf 'services:\n'
-              IMAGE_REF="$IMAGE_REF" WEB_PORT="${WEB_PORT:-${APP_PORT:-3000}}" APP_PORT="${APP_PORT:-${WEB_PORT:-3000}}" APP_ENV="${APP_ENV:-${{ inputs.environment }}}" docker compose -f "$COMPOSE_FILE" config --services | while read -r service; do
+              DATABASE_URL="${DATABASE_URL:-postgres://app:placeholder@central-db.invalid:5432/app}" IMAGE_REF="$IMAGE_REF" WEB_PORT="${WEB_PORT:-${APP_PORT:-3000}}" APP_PORT="${APP_PORT:-${WEB_PORT:-3000}}" APP_ENV="${APP_ENV:-${{ inputs.environment }}}" docker compose -f "$COMPOSE_FILE" config --services | while read -r service; do
                 [ -n "$service" ] || continue
                 role="$(alm_role_for_service "$service")"
                 container_name="$(alm_container_name_for_service "$service" "$role")"
@@ -189,18 +327,28 @@ jobs:
                 fi
                 if [ "${ALM_APPLY_CONTAINER_LABELS:-true}" = "true" ]; then
                   printf '    labels:\n'
-                  printf '      smawa.alm.app_id: "%s"\n' "$CAPP_APP_ID"
-                  printf '      smawa.alm.deployment_id: "%s"\n' "${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
-                  printf '      smawa.alm.environment: "%s"\n' "${APP_ENV:-dev}"
-                  printf '      smawa.alm.service: "%s"\n' "$service"
-                  printf '      smawa.alm.container_role: "%s"\n' "$role"
-                  printf '      smawa.alm.managed: "true"\n'
+                  printf '      rdworkx.alm.app_id: "%s"\n' "$CAPP_APP_ID"
+                  printf '      rdworkx.alm.deployment_id: "%s"\n' "${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
+                  printf '      rdworkx.alm.environment: "%s"\n' "${APP_ENV:-dev}"
+                  printf '      rdworkx.alm.service: "%s"\n' "$service"
+                  printf '      rdworkx.alm.container_role: "%s"\n' "$role"
+                  printf '      rdworkx.alm.managed: "true"\n'
                 fi
                 if [ "$role" = "database" ]; then
                   printf '    ulimits:\n'
                   printf '      nofile:\n'
                   printf '        soft: 65536\n'
                   printf '        hard: 65536\n'
+                  if [ -n "${ALM_DATA_BASE_DIR:-}" ]; then
+                    case "$service" in
+                      *mysql*|*mariadb*) data_target="/var/lib/mysql" ;;
+                      *mongo*|*mongodb*) data_target="/data/db" ;;
+                      *) data_target="/var/lib/postgresql/data" ;;
+                    esac
+                    data_source="${ALM_DATA_BASE_DIR%/}/$service"
+                    printf '    volumes:\n'
+                    printf '      - "%s:%s"\n' "$data_source" "$data_target"
+                  fi
                 fi
               done
             } > "$ALM_COMPOSE_OVERRIDE"
@@ -211,7 +359,30 @@ jobs:
             scp -i ~/.ssh/deploy_key "$ALM_COMPOSE_OVERRIDE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/compose.alm-names.yaml"
             REMOTE_COMPOSE_ARGS="$REMOTE_COMPOSE_ARGS -f compose.alm-names.yaml"
           fi
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && if grep -q 'DATABASE_URL.*is required' compose.yaml compose.alm-names.yaml 2>/dev/null && ! grep -q '^DATABASE_URL=.' .env 2>/dev/null; then echo 'DATABASE_URL is missing in remote .env for API service.' >&2; exit 1; fi"
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && touch .env && IMAGE_REF='$IMAGE_REF' WEB_PORT='${WEB_PORT:-${APP_PORT:-3000}}' APP_PORT='${APP_PORT:-${WEB_PORT:-3000}}' APP_ENV='${APP_ENV:-${{ inputs.environment }}}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' up -d --remove-orphans --no-build"
+          HEALTH_PATH="${HEALTH_PATH:-/api/health}"
+          case "$HEALTH_PATH" in /*) ;; *) HEALTH_PATH="/$HEALTH_PATH" ;; esac
+          HEALTH_URL="http://127.0.0.1:${WEB_PORT:-${APP_PORT:-3000}}$HEALTH_PATH"
+          HEALTH_STATUS=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            HEALTH_STATUS="$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "curl -sS -o /dev/null -w '%{http_code}' '$HEALTH_URL'" || true)"
+            case "$HEALTH_STATUS" in 2*|3*) break ;; esac
+            sleep 5
+          done
+          case "$HEALTH_STATUS" in
+            2*|3*) ;;
+            *)
+              if [ -n "${ALM_CALLBACK_URL:-}" ] && [ -n "${ALM_CALLBACK_TOKEN:-}" ]; then
+                curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
+                  -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
+                  -H "content-type: application/json" \
+                  -d "{\"environment\":\"${{ inputs.environment }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"${{ inputs.image_digest }}\",\"status\":\"failed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"executionItemKey\":\"${{ inputs.execution_item_key }}\",\"placement\":{\"streetId\":\"${{ inputs.placement_street_id }}\",\"phaseId\":\"${{ inputs.placement_phase_id }}\",\"serverId\":\"${{ inputs.placement_server_id }}\",\"caddyInstanceId\":\"${{ inputs.placement_caddy_instance_id }}\"},\"sourcePlacement\":{\"streetId\":\"${{ inputs.source_placement_street_id }}\",\"phaseId\":\"${{ inputs.source_placement_phase_id }}\",\"serverId\":\"${{ inputs.source_placement_server_id }}\"},\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"healthStatus\":\"$HEALTH_STATUS\",\"healthPath\":\"$HEALTH_PATH\",\"healthUrl\":\"$HEALTH_URL\",\"message\":\"Health check failed after deploy: $HEALTH_URL returned ${HEALTH_STATUS:-no response}\"}"
+              fi
+              echo "Health check failed after deploy: $HEALTH_URL returned ${HEALTH_STATUS:-no response}" >&2
+              exit 1
+              ;;
+          esac
           WEB_CONTAINER_IP=$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && cid=\$(COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment }}}' ps -q '${WEB_SERVICE_NAME:-web}' 2>/dev/null || true); if [ -n \"\$cid\" ]; then docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"\$cid\"; fi" | tr -d '\r\n')
           CADDY_TARGET=""
           if [ -n "${WEB_CONTAINER_IP:-}" ] && [ -n "${WEB_INTERNAL_PORT:-}" ]; then
@@ -221,5 +392,5 @@ jobs:
             curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
               -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
               -H "content-type: application/json" \
-              -d "{\"environment\":\"${{ inputs.environment }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"${{ inputs.image_digest }}\",\"status\":\"deployed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webContainerIp\":\"$WEB_CONTAINER_IP\",\"webInternalPort\":\"${WEB_INTERNAL_PORT:-}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"publicDomain\":\"${PUBLIC_DOMAIN:-}\",\"caddyTarget\":\"$CADDY_TARGET\",\"message\":\"Self-hosted runner deployed existing digest to ${{ inputs.environment }}\"}"
+              -d "{\"environment\":\"${{ inputs.environment }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"${{ inputs.image_digest }}\",\"status\":\"deployed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"executionItemKey\":\"${{ inputs.execution_item_key }}\",\"placement\":{\"streetId\":\"${{ inputs.placement_street_id }}\",\"phaseId\":\"${{ inputs.placement_phase_id }}\",\"serverId\":\"${{ inputs.placement_server_id }}\",\"caddyInstanceId\":\"${{ inputs.placement_caddy_instance_id }}\"},\"sourcePlacement\":{\"streetId\":\"${{ inputs.source_placement_street_id }}\",\"phaseId\":\"${{ inputs.source_placement_phase_id }}\",\"serverId\":\"${{ inputs.source_placement_server_id }}\"},\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webContainerIp\":\"$WEB_CONTAINER_IP\",\"webInternalPort\":\"${WEB_INTERNAL_PORT:-}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"publicDomain\":\"${PUBLIC_DOMAIN:-}\",\"caddyTarget\":\"$CADDY_TARGET\",\"healthStatus\":\"$HEALTH_STATUS\",\"healthPath\":\"$HEALTH_PATH\",\"healthUrl\":\"$HEALTH_URL\",\"message\":\"Self-hosted runner deployed existing digest to ${{ inputs.environment }}; health $HEALTH_STATUS\"}"
           fi
