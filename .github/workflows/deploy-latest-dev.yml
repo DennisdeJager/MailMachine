@@ -1,7 +1,9 @@
 # Managed by Codex Apps ALM
 name: Deploy Latest To Dev
+run-name: >-
+  Deploy Latest To ${{ inputs.environment || 'dev' }}${{ inputs.execution_item_key && format(' · {0}', inputs.execution_item_key) || '' }}${{ inputs.deploy_context_key && format(' · {0}', inputs.deploy_context_key) || '' }}${{ inputs.deploy_context_title && format(' · {0}', inputs.deploy_context_title) || '' }}
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       ref:
@@ -9,12 +11,57 @@ name: Deploy Latest To Dev
         required: true
         default: main
         type: string
+      environment:
+        description: Target environment
+        required: false
+        default: dev
+        type: string
       deployment_plan_id:
         description: ALM deployment plan id
         required: false
         type: string
       execution_id:
         description: ALM execution id
+        required: false
+        type: string
+      execution_item_key:
+        description: ALM execution item key
+        required: false
+        type: string
+      placement_street_id:
+        description: ALM target placement street id
+        required: false
+        type: string
+      placement_phase_id:
+        description: ALM target placement phase id
+        required: false
+        type: string
+      placement_server_id:
+        description: ALM target placement server id
+        required: false
+        type: string
+      placement_caddy_instance_id:
+        description: ALM target Caddy instance id
+        required: false
+        type: string
+      source_placement_street_id:
+        description: ALM source placement street id
+        required: false
+        type: string
+      source_placement_phase_id:
+        description: ALM source placement phase id
+        required: false
+        type: string
+      source_placement_server_id:
+        description: ALM source placement server id
+        required: false
+        type: string
+      deploy_context_key:
+        description: Optional backlog/PBI code for the deploy run name
+        required: false
+        type: string
+      deploy_context_title:
+        description: Optional backlog/PBI title for the deploy run name
         required: false
         type: string
 
@@ -26,7 +73,7 @@ permissions:
 jobs:
   build-and-deploy-dev:
     runs-on: [self-hosted, capps-alm]
-    environment: dev
+    environment: ${{ inputs.environment || 'dev' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +100,18 @@ jobs:
         id: dockerfile
         run: |
           set -euo pipefail
+          compose_file=""
+          for candidate in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
+            if [ -f "$candidate" ]; then
+              compose_file="$candidate"
+              break
+            fi
+          done
+          if [ -n "$compose_file" ]; then
+            echo "build_image=false" >> "$GITHUB_OUTPUT"
+            echo "Compose file $compose_file found; deployment will build the compose project on the target host."
+            exit 0
+          fi
           if [ -f Dockerfile ]; then
             echo "build_image=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -103,6 +162,9 @@ jobs:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR }}
+          ALM_DATA_BASE_DIR: ${{ vars.ALM_DATA_BASE_DIR }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL: ${{ vars.DATABASE_SSL }}
           BUILD_IMAGE: ${{ steps.dockerfile.outputs.build_image }}
           IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
@@ -110,11 +172,6 @@ jobs:
           WEB_PORT: ${{ vars.WEB_PORT }}
           APP_PORT: ${{ vars.APP_PORT }}
           APP_ENV: ${{ vars.APP_ENV }}
-          API_BASE_URL: ${{ vars.API_BASE_URL || 'http://api:3001' }}
-          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '15433' }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
-          ADMIN_SETUP_TOKEN: ${{ secrets.ADMIN_SETUP_TOKEN }}
           COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
           ALM_CONTAINER_NAME_TEMPLATE: ${{ vars.ALM_CONTAINER_NAME_TEMPLATE }}
           ALM_INCLUDE_ENV_IN_CONTAINER_NAME: ${{ vars.ALM_INCLUDE_ENV_IN_CONTAINER_NAME }}
@@ -123,6 +180,7 @@ jobs:
           ALM_SERVICE_ROLES: ${{ vars.ALM_SERVICE_ROLES }}
           WEB_SERVICE_NAME: ${{ vars.WEB_SERVICE_NAME }}
           WEB_INTERNAL_PORT: ${{ vars.WEB_INTERNAL_PORT }}
+          HEALTH_PATH: ${{ vars.HEALTH_PATH }}
           PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
           ALM_CALLBACK_URL: ${{ vars.ALM_CALLBACK_URL }}
           ALM_CALLBACK_TOKEN: ${{ secrets.ALM_CALLBACK_TOKEN }}
@@ -137,68 +195,44 @@ jobs:
             IMAGE_REF="$IMAGE_REPOSITORY@$IMAGE_DIGEST"
           fi
           CALLBACK_IMAGE_DIGEST="${IMAGE_DIGEST:-source-${GITHUB_SHA}}"
-          require_value() {
-            local name="$1"
-            local value="$2"
-            if [ -z "$value" ]; then
-              echo "$name is required for MailMachine deployment." >&2
-              exit 1
-            fi
-          }
-          require_value "DEPLOY_HOST" "${DEPLOY_HOST:-}"
-          require_value "DEPLOY_USER" "${DEPLOY_USER:-}"
-          require_value "DEPLOY_SSH_KEY" "${DEPLOY_SSH_KEY:-}"
-          require_value "POSTGRES_PASSWORD" "${POSTGRES_PASSWORD:-}"
-          require_value "CREDENTIAL_ENCRYPTION_KEY" "${CREDENTIAL_ENCRYPTION_KEY:-}"
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
-          dump_mailmachine_diagnostics() {
-            local status="$?"
-            echo "::group::MailMachine deploy diagnostics"
-            if [ -n "${DEPLOY_HOST:-}" ] && [ -n "${DEPLOY_USER:-}" ] && [ -f ~/.ssh/deploy_key ]; then
-              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker ps -a --filter 'name=mailmachine' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
-              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker logs --tail 120 mailmachine-api" || true
-              ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker logs --tail 80 mailmachine-web" || true
-            fi
-            if [ -n "${DATA_DEPLOY_HOST:-192.168.10.50}" ] && [ -n "${DATA_DEPLOY_USER_RESOLVED:-}" ] && [ -f ~/.ssh/deploy_key ]; then
-              ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@${DATA_DEPLOY_HOST:-192.168.10.50}" "docker ps -a --filter 'name=mailmachine-postgres' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'" || true
-              ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@${DATA_DEPLOY_HOST:-192.168.10.50}" "docker logs --tail 80 mailmachine-postgres" || true
-            fi
-            echo "::endgroup::"
-            exit "$status"
-          }
-          trap dump_mailmachine_diagnostics ERR
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR' && find '$DEPLOY_APP_DIR' -mindepth 1 ! -name '.env' ! -name '.env.*' -exec rm -rf {} +"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$DEPLOY_APP_DIR' '${ALM_DATA_BASE_DIR:-}'" <<'CAPPS_PREPARE_APP_DIR'
+          set -eu
+          APP_DIR="$1"
+          ALM_DATA_BASE="${2:-}"
+          ALM_DATA_PRESERVE=""
+          case "$ALM_DATA_BASE" in
+            "$APP_DIR"/*)
+              ALM_DATA_PRESERVE="${ALM_DATA_BASE#"$APP_DIR"/}"
+              ALM_DATA_PRESERVE="${ALM_DATA_PRESERVE%%/*}"
+              ;;
+          esac
+          mkdir -p "$APP_DIR"
+          TARGET_OWNER="$(id -u):$(id -g)"
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo chown -R "$TARGET_OWNER" "$APP_DIR"
+          elif command -v docker >/dev/null 2>&1; then
+            docker run --rm -v "$APP_DIR:/capps-appdir" alpine:3.20 chown -R "$TARGET_OWNER" /capps-appdir || true
+          fi
+          chmod -R u+rwX "$APP_DIR" 2>/dev/null || true
+          CLEANUP_ERRORS="$(mktemp)"
+          if ! find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name '.env' ! -name '.env.*' ! -name 'data' ! -name 'storage' ! -name 'uploads' ${ALM_DATA_PRESERVE:+! -name "$ALM_DATA_PRESERVE"} -exec rm -rf {} + 2>"$CLEANUP_ERRORS"; then
+            echo "ALM deploy: opschonen van $APP_DIR is mislukt. Deploy user $(id -un) mist eigenaarschap op bestaande bestanden; passwordless sudo ontbreekt en docker-chown kon dit niet herstellen." >&2
+            head -n 5 "$CLEANUP_ERRORS" >&2 || true
+            echo "Herstel eenmalig als root op de Proxmox-host van deze target: draai scripts/proxmox/fix-data-ownership.sh --apply uit de ALMDeployer-repo om $APP_DIR host-side te herstellen (zie RDWorkxGitOps/08-infrastructure/uid-mapping.md)." >&2
+            rm -f "$CLEANUP_ERRORS"
+            exit 1
+          fi
+          rm -f "$CLEANUP_ERRORS"
+          CAPPS_PREPARE_APP_DIR
           printf '%s\n' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
           COMPOSE_FILE=""
           for candidate in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
             if [ -f "$candidate" ]; then COMPOSE_FILE="$candidate"; break; fi
           done
-          if [ -f compose.data.yaml ]; then
-            DATA_DEPLOY_HOST="${DATA_DEPLOY_HOST:-192.168.10.50}"
-            DATA_DEPLOY_USER_CANDIDATES="${DATA_DEPLOY_USER:-$DEPLOY_USER root}"
-            DATA_COMPOSE_DIR="${DATA_COMPOSE_DIR:-/data/compose/mailmachine-postgres}"
-            ssh-keyscan -H "$DATA_DEPLOY_HOST" >> ~/.ssh/known_hosts
-            DATA_DEPLOY_USER_RESOLVED=""
-            for candidate_user in $DATA_DEPLOY_USER_CANDIDATES; do
-              if ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/deploy_key "$candidate_user@$DATA_DEPLOY_HOST" "mkdir -p '$DATA_COMPOSE_DIR'"; then
-                DATA_DEPLOY_USER_RESOLVED="$candidate_user"
-                break
-              fi
-            done
-            if [ -z "$DATA_DEPLOY_USER_RESOLVED" ]; then
-              echo "No authorized SSH user for MailMachine data host $DATA_DEPLOY_HOST. Tried: $DATA_DEPLOY_USER_CANDIDATES" >&2
-              exit 1
-            fi
-            scp -i ~/.ssh/deploy_key compose.data.yaml "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST:$DATA_COMPOSE_DIR/compose.data.yaml"
-            {
-              printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
-            } | ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST" "umask 077 && cat > '$DATA_COMPOSE_DIR/.env.tmp' && mv '$DATA_COMPOSE_DIR/.env.tmp' '$DATA_COMPOSE_DIR/.env'"
-            ssh -i ~/.ssh/deploy_key "$DATA_DEPLOY_USER_RESOLVED@$DATA_DEPLOY_HOST" "cd '$DATA_COMPOSE_DIR' && docker compose -f compose.data.yaml up -d"
-          fi
           if [ -n "$COMPOSE_FILE" ]; then
             SOURCE_TAR="/tmp/capps-source.tar"
             SOURCE_ARCHIVE="$SOURCE_TAR.gz"
@@ -224,21 +258,52 @@ jobs:
             fi
             scp -i ~/.ssh/deploy_key "$SOURCE_ARCHIVE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/source.tar.gz"
             ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && tar --exclude='.env' --exclude='.env.*' -xzf source.tar.gz && rm source.tar.gz"
-            POSTGRES_PASSWORD_ENCODED="$(POSTGRES_PASSWORD="$POSTGRES_PASSWORD" node -e 'process.stdout.write(encodeURIComponent(process.env.POSTGRES_PASSWORD || ""))')"
-            {
-              printf 'APP_ENV=%s\n' "${APP_ENV:-dev}"
-              printf 'WEB_PORT=%s\n' "${WEB_PORT:-${APP_PORT:-3000}}"
-              printf 'APP_PORT=%s\n' "${APP_PORT:-${WEB_PORT:-3000}}"
-              printf 'API_BASE_URL=%s\n' "${API_BASE_URL:-http://api:3001}"
-              printf 'POSTGRES_PORT=%s\n' "${POSTGRES_PORT:-15433}"
-              printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-              printf 'DATABASE_URL=postgres://mailmachine:%s@192.168.10.50:%s/mailmachine\n' "$POSTGRES_PASSWORD_ENCODED" "${POSTGRES_PORT:-15433}"
-              printf 'CREDENTIAL_ENCRYPTION_KEY=%s\n' "$CREDENTIAL_ENCRYPTION_KEY"
-              if [ -n "${ADMIN_SETUP_TOKEN:-}" ]; then
-                printf 'ADMIN_SETUP_TOKEN=%s\n' "$ADMIN_SETUP_TOKEN"
-              fi
-            } | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && umask 077 && cat > .env.tmp && mv .env.tmp .env"
+            ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi"
           fi
+          RUNTIME_ENV_FILE="$(mktemp)"
+          touch "$RUNTIME_ENV_FILE"
+          if [ -n "${DATABASE_URL:-}" ]; then printf 'DATABASE_URL=%s\n' "$DATABASE_URL" >> "$RUNTIME_ENV_FILE"; fi
+          if [ -n "${DATABASE_SSL:-}" ]; then printf 'DATABASE_SSL=%s\n' "$DATABASE_SSL" >> "$RUNTIME_ENV_FILE"; fi
+          if [ -s "$RUNTIME_ENV_FILE" ]; then
+            scp -i ~/.ssh/deploy_key "$RUNTIME_ENV_FILE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/.env.alm-runtime" >/dev/null
+            ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$DEPLOY_APP_DIR'" <<'CAPPS_APPLY_RUNTIME_ENV'
+          set -eu
+          APP_DIR="$1"
+          cd "$APP_DIR"
+          touch .env
+          if [ -s .env.alm-runtime ]; then
+            awk -F= '
+              NR==FNR {
+                key=$1
+                if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+                  values[key]=$0
+                  order[++count]=key
+                }
+                next
+              }
+              {
+                key=$0
+                sub(/=.*/, "", key)
+                if (key in values) {
+                  if (!seen[key]++) print values[key]
+                  next
+                }
+                print
+              }
+              END {
+                for (i=1; i<=count; i++) {
+                  key=order[i]
+                  if (!seen[key]++) print values[key]
+                }
+              }
+            ' .env.alm-runtime .env > .env.tmp
+            mv .env.tmp .env
+            chmod 600 .env || true
+            rm -f .env.alm-runtime
+          fi
+          CAPPS_APPLY_RUNTIME_ENV
+          fi
+          rm -f "$RUNTIME_ENV_FILE"
           if [ -z "$COMPOSE_FILE" ]; then
             if [ -z "$IMAGE_REF" ]; then
               echo "Cannot generate compose.yaml without a built image." >&2
@@ -256,7 +321,7 @@ jobs:
               env_file:
                 - .env
               environment:
-                APP_ENV: ${APP_ENV:-dev}
+                APP_ENV: ${APP_ENV:-${{ inputs.environment || 'dev' }}}
           COMPOSE
           fi
           COMPOSE_UP_FLAG="--no-build"
@@ -297,19 +362,27 @@ jobs:
             local service="$(alm_slug "$1")"
             local role="$2"
             local template="${ALM_CONTAINER_NAME_TEMPLATE:-}"
-            [ -n "$template" ] || template="{appId}-{service}"
-            local deployment_id="${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
-            local app_slug="$(alm_slug "$deployment_id")"
+            [ -n "$template" ] || template="{deploymentId}-{service}"
+            local app_id="${CAPP_APP_ID:-${CAPP_DEPLOYMENT_ID:-}}"
+            local deployment_id="${CAPP_DEPLOYMENT_ID:-$app_id}"
+            local app_slug="$(alm_slug "$app_id")"
             if [[ "$service" == "${app_slug}-"* ]] || [[ "$service" == "${app_slug}_"* ]]; then
               service="${service:${#app_slug}+1}"
               [ -n "$service" ] || service="$app_slug"
             elif [[ -n "$service" ]] && { [[ "$app_slug" == *"-${service}" ]] || [[ "$app_slug" == *"_${service}" ]]; }; then
               service=""
             fi
+            if [ "$role" = "database" ]; then
+              case "$service" in
+                postgres|postgresql) service="postgres" ;;
+                mysql|mariadb|mongo|mongodb|database) service="db" ;;
+              esac
+            fi
             local name="$template"
-            name="${name//\{appId\}/$deployment_id}"
-            name="${name//\{env\}/${APP_ENV:-dev}}"
-            name="${name//\{environment\}/${APP_ENV:-dev}}"
+            name="${name//\{appId\}/$app_id}"
+            name="${name//\{deploymentId\}/$deployment_id}"
+            name="${name//\{env\}/${APP_ENV:-${{ inputs.environment || 'dev' }}}}"
+            name="${name//\{environment\}/${APP_ENV:-${{ inputs.environment || 'dev' }}}}"
             name="${name//\{service\}/$service}"
             name="${name//\{role\}/$role}"
             name="$(alm_slug "$name")"
@@ -322,7 +395,7 @@ jobs:
             ALM_COMPOSE_OVERRIDE="compose.alm-names.yaml"
             {
               printf 'services:\n'
-              IMAGE_REF="$IMAGE_REF" WEB_PORT="${WEB_PORT:-${APP_PORT:-3000}}" APP_PORT="${APP_PORT:-${WEB_PORT:-3000}}" APP_ENV="${APP_ENV:-dev}" docker compose -f "$COMPOSE_FILE" config --services | while read -r service; do
+              DATABASE_URL="${DATABASE_URL:-postgres://app:placeholder@central-db.invalid:5432/app}" IMAGE_REF="$IMAGE_REF" WEB_PORT="${WEB_PORT:-${APP_PORT:-3000}}" APP_PORT="${APP_PORT:-${WEB_PORT:-3000}}" APP_ENV="${APP_ENV:-${{ inputs.environment || 'dev' }}}" docker compose -f "$COMPOSE_FILE" config --services | while read -r service; do
                 [ -n "$service" ] || continue
                 role="$(alm_role_for_service "$service")"
                 container_name="$(alm_container_name_for_service "$service" "$role")"
@@ -332,18 +405,28 @@ jobs:
                 fi
                 if [ "${ALM_APPLY_CONTAINER_LABELS:-true}" = "true" ]; then
                   printf '    labels:\n'
-                  printf '      smawa.alm.app_id: "%s"\n' "$CAPP_APP_ID"
-                  printf '      smawa.alm.deployment_id: "%s"\n' "${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
-                  printf '      smawa.alm.environment: "%s"\n' "${APP_ENV:-dev}"
-                  printf '      smawa.alm.service: "%s"\n' "$service"
-                  printf '      smawa.alm.container_role: "%s"\n' "$role"
-                  printf '      smawa.alm.managed: "true"\n'
+                  printf '      rdworkx.alm.app_id: "%s"\n' "$CAPP_APP_ID"
+                  printf '      rdworkx.alm.deployment_id: "%s"\n' "${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}"
+                  printf '      rdworkx.alm.environment: "%s"\n' "${APP_ENV:-${{ inputs.environment || 'dev' }}}"
+                  printf '      rdworkx.alm.service: "%s"\n' "$service"
+                  printf '      rdworkx.alm.container_role: "%s"\n' "$role"
+                  printf '      rdworkx.alm.managed: "true"\n'
                 fi
                 if [ "$role" = "database" ]; then
                   printf '    ulimits:\n'
                   printf '      nofile:\n'
                   printf '        soft: 65536\n'
                   printf '        hard: 65536\n'
+                  if [ -n "${ALM_DATA_BASE_DIR:-}" ]; then
+                    case "$service" in
+                      *mysql*|*mariadb*) data_target="/var/lib/mysql" ;;
+                      *mongo*|*mongodb*) data_target="/data/db" ;;
+                      *) data_target="/var/lib/postgresql/data" ;;
+                    esac
+                    data_source="${ALM_DATA_BASE_DIR%/}/$service"
+                    printf '    volumes:\n'
+                    printf '      - "%s:%s"\n' "$data_source" "$data_target"
+                  fi
                 fi
               done
             } > "$ALM_COMPOSE_OVERRIDE"
@@ -354,8 +437,31 @@ jobs:
             scp -i ~/.ssh/deploy_key "$ALM_COMPOSE_OVERRIDE" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_APP_DIR/compose.alm-names.yaml"
             REMOTE_COMPOSE_ARGS="$REMOTE_COMPOSE_ARGS -f compose.alm-names.yaml"
           fi
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && touch .env && IMAGE_REF='$IMAGE_REF' WEB_PORT='${WEB_PORT:-${APP_PORT:-3000}}' APP_PORT='${APP_PORT:-${WEB_PORT:-3000}}' APP_ENV='${APP_ENV:-dev}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-dev}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-dev}' up -d --remove-orphans $COMPOSE_UP_FLAG"
-          WEB_CONTAINER_IP=$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && cid=\$(COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-dev}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-dev}' ps -q '${WEB_SERVICE_NAME:-web}' 2>/dev/null || true); if [ -n \"\$cid\" ]; then docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"\$cid\"; fi" | tr -d '\r\n')
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && if grep -q 'DATABASE_URL.*is required' compose.yaml compose.alm-names.yaml 2>/dev/null && ! grep -q '^DATABASE_URL=.' .env 2>/dev/null; then echo 'DATABASE_URL is missing in remote .env for API service.' >&2; exit 1; fi"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && touch .env && IMAGE_REF='$IMAGE_REF' WEB_PORT='${WEB_PORT:-${APP_PORT:-3000}}' APP_PORT='${APP_PORT:-${WEB_PORT:-3000}}' APP_ENV='${APP_ENV:-${{ inputs.environment || 'dev' }}}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment || 'dev' }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment || 'dev' }}}' up -d --remove-orphans $COMPOSE_UP_FLAG"
+          HEALTH_PATH="${HEALTH_PATH:-/api/health}"
+          case "$HEALTH_PATH" in /*) ;; *) HEALTH_PATH="/$HEALTH_PATH" ;; esac
+          HEALTH_URL="http://127.0.0.1:${WEB_PORT:-${APP_PORT:-3000}}$HEALTH_PATH"
+          HEALTH_STATUS=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            HEALTH_STATUS="$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "curl -sS -o /dev/null -w '%{http_code}' '$HEALTH_URL'" || true)"
+            case "$HEALTH_STATUS" in 2*|3*) break ;; esac
+            sleep 5
+          done
+          case "$HEALTH_STATUS" in
+            2*|3*) ;;
+            *)
+              if [ -n "${ALM_CALLBACK_URL:-}" ] && [ -n "${ALM_CALLBACK_TOKEN:-}" ]; then
+                curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
+                  -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
+                  -H "content-type: application/json" \
+                  -d "{\"environment\":\"${{ inputs.environment || 'dev' }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"$CALLBACK_IMAGE_DIGEST\",\"status\":\"failed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"executionItemKey\":\"${{ inputs.execution_item_key }}\",\"placement\":{\"streetId\":\"${{ inputs.placement_street_id }}\",\"phaseId\":\"${{ inputs.placement_phase_id }}\",\"serverId\":\"${{ inputs.placement_server_id }}\",\"caddyInstanceId\":\"${{ inputs.placement_caddy_instance_id }}\"},\"sourcePlacement\":{\"streetId\":\"${{ inputs.source_placement_street_id }}\",\"phaseId\":\"${{ inputs.source_placement_phase_id }}\",\"serverId\":\"${{ inputs.source_placement_server_id }}\"},\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"healthStatus\":\"$HEALTH_STATUS\",\"healthPath\":\"$HEALTH_PATH\",\"healthUrl\":\"$HEALTH_URL\",\"message\":\"Health check failed after deploy: $HEALTH_URL returned ${HEALTH_STATUS:-no response}\"}"
+              fi
+              echo "Health check failed after deploy: $HEALTH_URL returned ${HEALTH_STATUS:-no response}" >&2
+              exit 1
+              ;;
+          esac
+          WEB_CONTAINER_IP=$(ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && cid=\$(COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment || 'dev' }}}' docker compose $REMOTE_COMPOSE_ARGS -p '${COMPOSE_PROJECT_NAME:-${CAPP_DEPLOYMENT_ID:-$CAPP_APP_ID}-${{ inputs.environment || 'dev' }}}' ps -q '${WEB_SERVICE_NAME:-web}' 2>/dev/null || true); if [ -n \"\$cid\" ]; then docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"\$cid\"; fi" | tr -d '\r\n')
           CADDY_TARGET=""
           if [ -n "${WEB_CONTAINER_IP:-}" ] && [ -n "${WEB_INTERNAL_PORT:-}" ]; then
             CADDY_TARGET="$WEB_CONTAINER_IP:$WEB_INTERNAL_PORT"
@@ -364,5 +470,5 @@ jobs:
             curl -fsS -X POST "$ALM_CALLBACK_URL/api/environment-state" \
               -H "authorization: Bearer $ALM_CALLBACK_TOKEN" \
               -H "content-type: application/json" \
-              -d "{\"environment\":\"dev\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"$CALLBACK_IMAGE_DIGEST\",\"status\":\"deployed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webContainerIp\":\"$WEB_CONTAINER_IP\",\"webInternalPort\":\"${WEB_INTERNAL_PORT:-}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"publicDomain\":\"${PUBLIC_DOMAIN:-}\",\"caddyTarget\":\"$CADDY_TARGET\",\"message\":\"Self-hosted runner deployed latest ref to dev\"}"
+              -d "{\"environment\":\"${{ inputs.environment || 'dev' }}\",\"appId\":\"$CAPP_APP_ID\",\"repo\":\"${{ github.repository }}\",\"imageDigest\":\"$CALLBACK_IMAGE_DIGEST\",\"status\":\"deployed\",\"deploymentPlanId\":\"${{ inputs.deployment_plan_id }}\",\"executionId\":\"${{ inputs.execution_id }}\",\"executionItemKey\":\"${{ inputs.execution_item_key }}\",\"placement\":{\"streetId\":\"${{ inputs.placement_street_id }}\",\"phaseId\":\"${{ inputs.placement_phase_id }}\",\"serverId\":\"${{ inputs.placement_server_id }}\",\"caddyInstanceId\":\"${{ inputs.placement_caddy_instance_id }}\"},\"sourcePlacement\":{\"streetId\":\"${{ inputs.source_placement_street_id }}\",\"phaseId\":\"${{ inputs.source_placement_phase_id }}\",\"serverId\":\"${{ inputs.source_placement_server_id }}\"},\"workflowRunId\":\"${{ github.run_id }}\",\"sourceCommit\":\"${SOURCE_COMMIT:-}\",\"webServiceName\":\"${WEB_SERVICE_NAME:-web}\",\"webContainerIp\":\"$WEB_CONTAINER_IP\",\"webInternalPort\":\"${WEB_INTERNAL_PORT:-}\",\"webHostPort\":\"${WEB_PORT:-${APP_PORT:-}}\",\"publicDomain\":\"${PUBLIC_DOMAIN:-}\",\"caddyTarget\":\"$CADDY_TARGET\",\"healthStatus\":\"$HEALTH_STATUS\",\"healthPath\":\"$HEALTH_PATH\",\"healthUrl\":\"$HEALTH_URL\",\"message\":\"Self-hosted runner deployed latest ref to ${{ inputs.environment || 'dev' }}; health $HEALTH_STATUS\"}"
           fi
